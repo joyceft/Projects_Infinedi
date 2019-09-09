@@ -1,0 +1,752 @@
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+ 
+output: 
+  html_document: 
+   #css: layout.css
+    df_print: kable
+    
+<style type ="text/css">
+.main-container{
+  max-width: 1800px;
+  margin-left: 0px;
+  margin-right:0px;
+  margin-top :-33px;
+  margin-bottom: 0px;
+}
+body{
+font-size: 10px;
+text-align: justify;
+margin:1em 1em .5em 1em;
+font-family: arial;
+}
+
+h1.title {
+  font-size: 20px;
+  color: Black;
+  font-weight: bold;
+
+}
+h4.header{
+  font-size: 11px;
+  text-align: center;
+  font-weight: bold;
+}
+h6.header{
+  font-size:9px;
+  font-weight: bold;
+}
+
+</style>  
+```{r setup, include=FALSE}
+#this the updated version of GapAnalysis5.--add percentage label
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r include = FALSE}
+setwd("C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis")
+library('RODBC')
+library('sqldf')
+library('dplyr')
+library('rlang')
+library('tibble')
+library('RSQLS')
+library('ggplot2')
+library('reshape2')
+library('reshape')
+library('scales')
+library('gridExtra')
+library("ggpubr")
+library('grid')
+library('knitr')
+library('kableExtra')
+library('cowplot')
+library('plotly')
+
+```
+```{r message = FALSE, warning=FALSE}
+#assume all souce tables are already saved as csv. read from csv directly----- the original step is run queries in GapAnalysisV1.Rmd
+
+provider_tba = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\2019q2ProviderOverview_39.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+
+ad = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\ad_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+awv = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\awv_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+inpat = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\inpat_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+obs = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\obs_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+hha_3 = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\hha_3_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+preferhha = read.csv( 'C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\preferhha_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+erv = read.csv( 'C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\erv_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+mri = read.csv( 'C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\mri_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+snf = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\snf_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+bproc = read.csv( 'C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\bproc_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+bdrug = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\Gap Analysis\\result\\bdrug_2019Q2.csv',header = TRUE, stringsAsFactors = FALSE, colClasses = c('ProviderNpi' = 'character'))
+
+```
+
+```{r message = FALSE, warning=FALSE}
+#cleaning tables chunck
+#1.inpat & Obs
+inpat_rt = inpat %>%
+  group_by(ProviderNpi, ProviderName) %>%
+  summarise(category = 'Inpatient',
+            subcategory = 'Patient Count',
+            count = n_distinct(PatientHICNO)) %>%
+  rbind(
+    inpat %>%
+      group_by(ProviderNpi, ProviderName) %>%
+      summarise(category = 'Inpatient',
+                subcategory = 'Frequency Count',
+                count = n())
+  ) %>%
+  as.data.frame()
+obs_rt = obs %>%
+  group_by(ProviderNpi, ProviderName) %>%
+  summarise(category = 'OBS',
+            subcategory = 'Patient Count',
+            count = n_distinct(PatientHICNO)) %>%
+  rbind(
+    obs %>%
+      group_by(ProviderNpi, ProviderName) %>%
+      summarise(category = 'OBS',
+                subcategory = 'Frequency Count',
+                count = n())
+  )%>%
+  as.data.frame()
+inpat_obs = inpat_rt %>%
+  rbind(obs_rt) %>%
+  as.data.frame() 
+inpat_obs$ProviderName = as.character(inpat_obs$ProviderName)
+inpat_obs = inpat_obs %>%
+  rbind(c('9999999999','ACO_Avg',  'Inpatient','Patient Count', sum(inpat_rt$count[inpat_rt$category =='Inpatient'& inpat_rt$subcategory =='Patient Count'])),
+        c('9999999999','ACO_Avg',  'Inpatient','Frequency Count', sum(inpat_rt$count[inpat_rt$category =='Inpatient'& inpat_rt$subcategory =='Frequency Count'])),
+        c('9999999999','ACO_Avg',  'OBS' ,'Patient Count', sum(obs_rt$count[obs_rt$category =='OBS'& obs_rt$subcategory =='Patient Count'])),
+        c('9999999999','ACO_Avg',  'OBS','Frequency Count', sum(obs_rt$count[obs_rt$category =='OBS'& obs_rt$subcategory =='Frequency Count']))) 
+inpat_obs = inpat_obs%>%
+  group_by(ProviderNpi, ProviderName, subcategory) %>%
+  mutate(pct = round(as.numeric(count)/sum(as.numeric(count)),3))%>%
+  as.data.frame()
+#add no InpatObs Provider
+inpat_obs2 = provider_tba %>%
+  select(ProviderNpi, ProviderName) %>%
+  full_join(inpat_obs, by = c('ProviderNpi', 'ProviderName')) %>%
+  mutate(category = ifelse(is.na(category), 'No Applicable Patients', category),
+         subcategory = ifelse(is.na(subcategory), 'Frequency Count', subcategory),
+         count = ifelse(is.na(count), 0, count),
+         pct = ifelse(is.na(pct), 1, pct)) %>%
+  mutate(pct = as.numeric(pct))%>%
+  as.data.frame()
+```
+
+```{r}
+#2.Home Health Visit
+hha_3$episode_variable = as.character(hha_3$episode_variable)
+hha3 = hha_3 %>%
+  rbind(c('9999999999', '<1 episode', sum(hha_3$cnt_pat[hha_3$episode_variable =='<1 episode'])),
+        c('9999999999', '= 1 episode', sum(hha_3$cnt_pat[hha_3$episode_variable =='= 1 episode'])),
+        c('9999999999', '2+ episode', sum(hha_3$cnt_pat[hha_3$episode_variable =='2+ episode']))) %>%
+  as.data.frame() %>%
+  group_by(ProviderNpi) %>%
+  mutate(pct = round(as.numeric(cnt_pat)/sum(as.numeric(cnt_pat)),2)) %>%
+  as.data.frame()
+
+#adding No visit Provider
+hha4 = distinct(provider_tba %>%
+  select(ProviderNpi)) %>%
+  full_join(hha3, by = c('ProviderNpi')) %>%
+  mutate(episode_variable = ifelse(is.na(episode_variable), 'No Applicable Patients', episode_variable),
+         cnt_pat = ifelse(is.na(cnt_pat), 0,cnt_pat),
+         pct = as.numeric(ifelse(is.na(pct), 1, pct)))
+
+```
+```{r}
+#3. Preferred HHA
+preferred_tb = preferhha %>%
+  group_by(ProviderNpi,category)%>%
+  summarise(subcategory = 'Patient Count',
+            count = n_distinct(PatientHICNO)) %>%
+  rbind(preferhha %>%
+          group_by(ProviderNpi, category) %>%
+          summarise(subcategory ='Frequency Count',
+                    count = n())) %>%
+  as.data.frame() 
+preferred_tb = preferred_tb %>%
+  rbind(c('9999999999', 'Preferred HHA', 'Patient Count', length(unique(preferhha$PatientHICNO[preferhha$category=='Preferred HHA']))),
+        c('9999999999', 'Not Preferred HHA', 'Patient Count', length(unique(preferhha$PatientHICNO[preferhha$category=='Not Preferred HHA']))),
+        c('9999999999', 'Preferred HHA', 'Frequency Count', sum(preferred_tb$count[preferred_tb$category =='Preferred HHA'])),
+        c('9999999999', 'Not Preferred HHA', 'Frequency Count', sum(preferred_tb$count[preferred_tb$category =='Not Preferred HHA']))) %>%
+  group_by(ProviderNpi, subcategory)%>%
+  mutate(pct =round(as.numeric(count)/sum(as.numeric(count)),3)) %>%
+  as.data.frame()
+preferred_2 = distinct(provider_tba %>%
+  select(ProviderNpi)) %>%
+  full_join(preferred_tb, by = 'ProviderNpi') %>%
+  mutate(category = ifelse(is.na(category), 'No Applicable Patients', category),
+         subcategory = ifelse(is.na(subcategory), 'Frequency Count', subcategory),
+         count = ifelse(is.na(count), 0, count),
+         pct = ifelse(is.na(pct), 1, pct)) %>%
+  mutate(pct = as.numeric(pct)) %>%
+  as.data.frame()
+```  
+
+```{r}
+#4. Other measure :total cost
+#since we want to have total cost table, so get result table then put to chart_function
+result_func <- function(ptb, tb, title){
+    i = sapply(tb, is.factor)
+    tb[i] = lapply(tb[i], as.character)
+    
+  if(title =='Part B Procedures'){
+    tb_rt = tb%>%
+        mutate(category ='Part B Procedures' )%>%
+        select(ProviderNpi, ProviderName, category, cost_per_pat, Total_cost, Cnt_pat) %>%
+      mutate(cost_per_pat = round(cost_per_pat,0)) %>%
+       as.data.frame()%>%
+       rbind(c('9999999999','ACO',title, round(mean(tb$cost_per_pat),0), round(sum(tb$Total_cost),0), sum(tb$Cnt_pat)))
+  }else{
+  tb_rt = tb %>%
+    filter(final_line_pmt>0) %>%
+    group_by(ProviderNpi, ProviderName) %>%
+    summarise(category = title,
+              Cnt_pat = n_distinct(PatientID),
+              cost_per_pat = round(sum(final_line_pmt)/n_distinct(PatientID),0),
+              Total_cost = round(sum(final_line_pmt),0)) %>%
+  as.data.frame() %>%
+  rbind(c('9999999999', 'ACO',title, length(unique(tb$PatientID)), round(sum(tb$final_line_pmt)/length(unique(tb$PatientID)),0),round(sum(tb$final_line_pmt),0)))
+  }
+    ptb$ProviderNpi = as.character(ptb$ProviderNpi)
+    tb_rt1 = distinct(ptb %>%
+       select(ProviderName, ProviderNpi)) %>%
+       full_join(tb_rt, by = c('ProviderName', 'ProviderNpi')) %>%
+       mutate(category = ifelse(is.na(category), title, category),
+              Cnt_pat = ifelse(is.na(Cnt_pat), 0, Cnt_pat),
+              cost_per_pat = ifelse(is.na(cost_per_pat),0, cost_per_pat),
+              Total_cost = ifelse(is.na(Total_cost), 0, Total_cost))
+  return(tb_rt1)
+}
+#result_func(provider_tba, mri, 'MRI')
+tot_tb_func <- function(ptb, mri, erv, snf, bproc, bdrug){
+  mri_rt = result_func(ptb, mri, 'MRI')
+  erv_rt = result_func(ptb,erv, 'ER Visits')
+  snf_rt = result_func(ptb,snf, 'SNF Fac.')
+  bp_rt = result_func(ptb,bproc, 'Part B Procedures')
+  bd_rt = result_func(ptb, bdrug, 'Part B Drugs')
+  tot_tb = erv_rt %>%
+    rbind(bp_rt, snf_rt, mri_rt, bd_rt)
+ return(tot_tb)
+}
+#tot_tb_func(provider_tba, mri, erv, snf, bproc, bdrug)
+tot_tb2_func <- function(tot_tb, npi){
+  tot_tb = tot_tb %>%
+    select(-cost_per_pat)
+  tot_tb$Total_cost = round(as.numeric(tot_tb$Total_cost),0)
+
+  ttb1 = tot_tb %>%
+    filter(ProviderNpi %in% c(npi, '9999999999')) %>%
+    mutate(Total_cost = format(Total_cost, big.mark = ','))%>%
+    as.data.frame() %>%
+    mutate(Total_cost = paste('$', Total_cost, sep = ' '))%>%
+    select(-c(ProviderName)) %>%
+    arrange(category, ProviderNpi)
+
+  ttb1$ProviderNpi = as.numeric(ttb1$ProviderNpi)
+  ttb2= ttb1 %>%
+    reshape(idvar = 'ProviderNpi',
+            timevar = 'category',
+            direction = 'wide') %>%
+    as.data.frame() 
+
+  ttb3 = ttb2 %>%
+    rbind(c(rep(c('Your', 'Your'),5 )),
+          c(rep(c('VCFMC','VCFMC'), 5)))%>%
+    select(-ProviderNpi) %>%
+    as.data.frame()
+
+ttb4 = ttb3[c(3,1,4,2),c(1, 2, 7, 8, 9, 10,5, 6, 3, 4)]
+
+rownames(ttb4)<- NULL
+colnames(ttb4)= c(rep(c('Unique Patients','Total Cost'), 5))
+ 
+return(ttb4)
+}
+#tot_tb2_func(ttb, pnpi)
+```
+
+```{r message = FALSE, warning=FALSE}
+#all functions:
+#1.Provider Overview Table
+overview_func <- function(tb, npi){
+
+  tb = tb %>% 
+    filter(ProviderNpi ==npi) %>%
+    select(c('ProviderName', 'Number_of_Non_OptOut_Patients', 'Average_RAF_Score', 'Average_Cost_per_Patient', 'Average_Expected_Expenditure', 'Total_Cost')) %>%
+    mutate(Average_RAF_Score = round(Average_RAF_Score,2),
+           Average_Cost_per_Patient = paste('$',format(round(Average_Cost_per_Patient,2), big.mark = ','), sep = ' '),
+           Average_Expected_Expenditure = paste('$', format(Average_Expected_Expenditure, big.mark = ','), sep = ' '),
+           Total_Cost = paste('$', format(Total_Cost, big.mark = ','), sep = ' '))
+  colnames(tb) = c('Clinician Name', 'Num of Non OptOut Patient', 'Avg RAF Score', 'Avg Cost Per Patient', 'Avg Expected Expenditure Per Patient', 'Total Cost')
+  tb %>%
+    kable(align = 'c') %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"), position = 'center',full_width = TRUE, font_size = 11) %>%
+    column_spec(1, bold = TRUE)%>%
+    row_spec(0, bold = TRUE, color = 'white', background = '#1799CD', font_size = 10) 
+}
+#overview_func(provider_tba, '1033119946')
+```
+
+```{r warning=FALSE}
+## standard color
+group.colors = c("#8EAF4E", "#FDB748", "#C83E37", "#1799CD")
+group.colors3 = c("#1799CD","#FDB748", "#C83E37")
+##1799CD-blue, #8EAF4E-green, #FDB748-yellow, #C83E37-red
+
+#2.gap bar chart:
+gap_chart_function <- function(tb, measure, npi){
+    done_measure = 'Done'
+    not_measure = 'Not Done'
+ 
+    rt = tb %>%
+      group_by(ProviderNpi, ProviderName, GapStatus) %>%
+      summarise(cnt = as.numeric(n())) %>%
+      as.data.frame() 
+   rt$ProviderName = as.character(rt$ProviderName)
+   rt$GapStatus = as.character(rt$GapStatus)
+    rt = rt%>%
+      rbind(c('9999999999', 'ACO', 'Not Done', as.numeric(nrow(tb[tb$GapStatus=='Not Done', ])))) %>%
+      rbind(c('9999999999', 'ACO', 'Done', as.numeric(nrow(tb[tb$GapStatus=='Done', ]))))%>%
+      mutate(Provider = ifelse(ProviderName != 'ACO','YOU', ProviderName)) 
+    rt$cnt = as.numeric(rt$cnt)
+   # print(rt)
+#plot
+   rt %>%
+     group_by(ProviderNpi,ProviderName, Provider) %>%
+     mutate(pct = round(cnt/sum(cnt),3)) %>%
+     filter(ProviderNpi %in% c(npi, '9999999999')) %>%
+       ggplot(aes(x=Provider, y = pct, fill = GapStatus))+
+       geom_bar(position =position_stack(reverse = TRUE), stat = 'identity', width = 0.5)+
+       scale_y_continuous(labels = percent, limits = c(0, 1.15)) + 
+       scale_fill_manual(values= c('#1799CD','#FDB748'), drop = FALSE) + 
+       theme_bw() + theme(text= element_text(family = 'sans'),
+                          legend.position = 'bottom',
+                          legend.justification="center",
+                          legend.text = element_text(size = 9),
+                          legend.margin = margin(0,0,0,0),
+                          legend.box.margin = margin(-20, 20, -25, -10),
+                          legend.background =element_rect(fill = '#F9F8F8'),
+                          axis.title.x = element_text(margin = margin(0,0,0,0)),
+                          axis.text.y = element_text(size = 9),
+                          panel.border = element_blank(),
+                          panel.grid.major.x = element_blank(),
+                          panel.grid.major.y = element_line(size = 0.1, color = 'grey', linetype = 'dashed'),
+                          panel.background = element_rect(fill = '#F9F8F8'),
+                          plot.background = element_rect(fill = '#F9F8F8'),
+                          plot.title = element_text(size=10, hjust = 0.5, face = 'bold'),
+                          plot.margin = margin(15,45,20,15, 'pt')) +
+       geom_text(aes(label = percent(pct)),position = position_stack(vjust = 0.5, reverse = TRUE), size= 3) +
+       labs(title = measure, x = '', y = '') +
+       guides(fill = guide_legend(title = '')) +
+     coord_fixed(ratio=1)
+}
+#gap_chart_function(awv, 'AWV', '1033119946')
+```
+```{r warning=FALSE}
+#3.Pie chart:
+pie_chart_function <- function(tb, npi, tt, measure) {
+  tb$count = as.numeric(tb$count)
+  if(tt =='IO'){#for Inpat&OBS 'No HHA Patient' = '#dbe8ee',
+    c1 = c('Inpatient' = '#1799CD', 'OBS' = '#FDB748') #'NO Inpat&OBS Patient' ='#dbe8ee' 
+    m1 = c(15, 45, 20, 15)
+    ann = 'Total Short Stay Visits ='
+  }else{ #for Preferred HHA
+    c1 = c( 'Preferred HHA' = '#1799CD', 'Not Preferred HHA' = '#FDB748' )
+    m1 = c(20,30,20,30)
+    ann = 'Total HHA Visits ='
+  }
+    #count of total patient
+  y = tb %>% 
+    filter(subcategory =='Patient Count' & ProviderNpi == npi) %>%
+    summarise(total_count = sum(count))
+  yl = y$total_count
+  #print(yl)
+  if (yl == 0) { # when provider does not have any patient
+    bar_color = '#dbe8ee'
+    bk = '#dbe8ee'
+    c1 = c('No Applicable Patients' ='#dbe8ee' )
+    keywidth = 1
+    keyheight = 15
+    lcolor = '#dbe8ee'
+    alabel = 'No Applicable Patients'
+ 
+    tb %>%
+    filter(ProviderNpi == npi & subcategory == measure) %>%
+    ggplot(aes(x = '',y = pct, fill = category)) +
+    geom_bar(width = 1, stat = 'identity', color = bar_color) +
+    coord_polar('y', start = 0) +
+    scale_fill_manual(values= c1, drop = FALSE) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid  = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_rect(fill = bk),
+          plot.title = element_text(size = 10, hjust = 0.5, face = 'bold'),
+          plot.background = element_rect(fill = bk),
+          legend.text = element_text(size = 9),
+          legend.margin = margin(0,0,0,0),
+          legend.box.margin = margin(-10, 0, -20, -10),
+          legend.position = 'bottom',
+          legend.justification='center',
+          legend.direction='horizontal',
+          legend.background =element_rect(fill = bk, color = bk),
+          legend.key = element_blank(),
+          legend.key.height = unit(keyheight, "pt"),
+          legend.key.width = unit(keywidth, 'pt'),
+          plot.margin = margin(m1, 'pt'),
+          axis.title.x = element_text(size = 9, margin = margin(5, 0, 0, 0)))+
+    geom_text(aes(X = 1.2, label = percent(pct)),position = position_stack(vjust = 0.5), size= 3, color = lcolor) +
+    xlab('') + ylab(paste(ann, yl, sep = ' '))+labs(title = 'YOU') +
+    guides(fill = guide_legend(title = '')) +
+    annotate('text', x = 0, y = -100, label = alabel, size = 4.5, fontface = 'bold')
+  }else{
+    bar_color = 'white'
+    bk = '#F9F8F8'
+    keywidth = 15
+    keyheight = 15
+    lcolor = 'black'
+#if provider has this measure, then plot a pie, if not, plot a pie of nothing
+  tb %>%
+    filter(ProviderNpi == npi & subcategory == measure) %>%
+    ggplot(aes(x = '',y = pct, fill = category)) +
+    geom_bar(width = 1, stat = 'identity', color = bar_color) +
+    coord_polar('y', start = 0) +
+    scale_fill_manual(values= c1, drop = FALSE) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid  = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_rect(fill = bk),
+          plot.title = element_text(size = 10, hjust = 0.5, face = 'bold'),
+          plot.background = element_rect(fill = bk),
+          legend.text = element_text(size = 9),
+          legend.margin = margin(0,0,0,0),
+          legend.box.margin = margin(-10, 0, -20, -10),
+          legend.position = 'bottom',
+          legend.justification='center',
+          legend.direction='horizontal',
+          legend.background =element_rect(fill = bk, color = bk),
+          legend.key = element_blank(),
+          legend.key.height = unit(keyheight, "pt"),
+          legend.key.width = unit(keywidth, 'pt'),
+          plot.margin = margin(m1, 'pt'),
+          axis.title.x = element_text(size = 9, margin = margin(5, 0, 0, 0)))+
+    geom_text(aes(x = 1.2, label = percent(pct)),position = position_stack(vjust = 0.5), size= 3, color = lcolor) +    xlab('') + ylab(paste(ann, yl, sep = ' '))+labs(title = 'YOU') +
+    guides(fill = guide_legend(title = ''))
+   }
+}
+#pie_chart_function(inpat_obs2,'1992735930' ,'IO', 'Frequency Count')
+# pie_chart_function(inpat_obs2,'1033119946' ,'IO', 'Frequency Count')
+```
+
+```{r warning=FALSE}
+pie_aco_func <- function(tb, tt, measure){
+  tb$count = as.numeric(tb$count)
+  if(tt =='IO'){#for Inpat&OBS 'No HHA Patient' = '#dbe8ee',
+    c1 = c('Inpatient' = '#1799CD', 'OBS' = '#FDB748') #'NO Inpat&OBS Patient' ='#dbe8ee' 
+    m1 = c(20, 40, 20, 20)
+    ann = 'Total Short Stay Visits ='
+  }else{ #for Preferred HHA
+    c1 = c( 'Preferred HHA' = '#1799CD', 'Not Preferred HHA' = '#FDB748' )
+    m1 = c(20,45,20,30)
+    ann = 'Total HHA Visits ='
+  }
+  #count of total patient
+  y = tb %>% 
+    filter(subcategory =='Frequency Count' & ProviderNpi == '9999999999') %>%
+    summarise(total_count = sum(count))
+  yl = paste(ann, y$total_count, sep = ' ')
+
+  tb %>%
+    filter(ProviderNpi == '9999999999' & subcategory == measure) %>%
+    ggplot(aes(x = '',y = pct, fill = category)) + 
+    geom_bar(width = 1, stat = 'identity', color = 'white') +
+    coord_polar('y', start = 0) +
+    scale_fill_manual(values= c1, drop = FALSE) +
+    theme_bw() +
+    theme(legend.text = element_text(size = 9),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid  = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_rect(fill = '#F9F8F8'),
+          plot.title = element_text(size = 10, hjust = 0.5, face = 'bold'),
+          plot.background = element_rect(fill = '#F9F8F8'),
+          legend.margin = margin(0,0,0,0),
+          legend.box.margin = margin(-10, 0, -20, -10),
+          legend.position = 'bottom',
+          legend.justification='center',
+          legend.direction='horizontal',
+          legend.background =element_rect(fill = '#F9F8F8'),
+          plot.margin = margin(m1, 'pt'),
+          axis.title.x = element_text(size = 9, margin = margin(5, 0, 0, 0)))+
+    geom_text(aes(x = 1.2,label = percent(pct)),position = position_stack(vjust = 0.5), size= 3) +
+    xlab('') + ylab(yl)+labs(title = 'ACO') +
+    guides(fill = guide_legend(title = '')) 
+}
+
+ # pie_aco_func(inpat_obs2, 'IO', 'Frequency Count')
+ # pie_aco_func(preferred_2, 'Preferred', 'Frequency Count')
+
+
+```
+```{r warning=FALSE}
+#4. HHA pie chart:
+
+##1799CD-blue, #8EAF4E-green, #FDB748-yellow, #C83E37-red
+hhachart_aco_func <- function (hha){
+  hha$cnt_pat = as.numeric(hha$cnt_pat)
+  y = sum(hha$cnt_pat[hha$ProviderNpi == aco])
+
+  hha %>%
+     filter(ProviderNpi ==aco) %>%
+     ggplot( aes(x = '',y = pct, fill = episode_variable)) + 
+     geom_bar(width = 1, stat = "identity", color = 'white') + 
+     coord_polar('y', start = 0) + 
+     scale_fill_manual(values= c('<1 episode' = '#8EAF4E',
+                                 '= 1 episode'= '#FDB748',
+                                 '2+ episode' = '#C83E37'), drop = FALSE) + 
+     theme_bw() +
+     theme(axis.text = element_blank(),
+           axis.ticks = element_blank(),
+           panel.grid  = element_blank(),
+           panel.border = element_blank(),
+           panel.background = element_rect(fill = '#F9F8F8'),
+           plot.title = element_text(size = 10, hjust = 0.5, face = 'bold'),
+           plot.background = element_rect(fill = '#F9F8F8'),
+           legend.text = element_text(size = 9),
+           legend.margin = margin(0,0,0,0),
+           legend.box.margin = margin(-10, 0, -20, -10),
+           legend.position = 'bottom',
+           legend.background =element_rect(fill = '#F9F8F8'),
+           plot.margin = margin(20,45,20,40, 'pt'),
+           axis.title.x = element_text(size = 9, margin = margin(5, 0, 5, 0)))+
+    geom_text(aes(x = 1.2, label = percent(pct)),position = position_stack(vjust = 0.5), size= 3) + 
+    xlab('') + ylab(paste('Total HHA Patients =', y, sep =' ')) + labs(title = 'ACO') +
+    guides(fill = guide_legend(title = '')) 
+}
+#hhachart_aco_func(hha4)
+```
+```{r warning=FALSE}
+hhachart_func <- function (hha, npi){
+  hha$cnt_pat = as.numeric(hha$cnt_pat)
+  
+  y = sum(hha$cnt_pat[hha$ProviderNpi == npi])
+  if (y == 0) { # when provider does not have any patient
+    bar_color = '#dbe8ee'
+    bk = '#dbe8ee'
+    c1 = c('No Applicable Patients' ='#dbe8ee' )
+    keywidth = 1
+    keyheight = 15
+    lcolor ='#dbe8ee' 
+    alabel = 'No Applicable Patients'
+    hha %>%
+     filter(ProviderNpi ==npi) %>%
+     ggplot( aes(x = '',y = pct, fill = episode_variable)) + 
+     geom_bar(width = 1, stat = "identity", color = bar_color) + 
+     coord_polar('y', start = 0) + 
+     scale_fill_manual(values= c1, drop = FALSE) + 
+     theme_bw() +
+     theme(axis.text = element_blank(),
+           axis.ticks = element_blank(),
+           panel.grid  = element_blank(),
+           panel.border = element_blank(),
+           panel.background = element_rect(fill = bk),
+           legend.text = element_text(size = 9),
+           legend.margin = margin(0,0,0,0),
+           legend.box.margin = margin(-10, 0, -20, -10),
+           legend.position = 'bottom',
+           legend.background =element_rect(fill = bk),
+           legend.key = element_blank(),
+           legend.key.height = unit(keyheight, "pt"),
+           legend.key.width = unit(keywidth, 'pt'),
+           plot.title = element_text(size = 10, hjust = 0.5, face = 'bold'),
+           plot.background = element_rect(fill = bk),
+           plot.margin = margin(20,45,20,40, 'pt'),
+           axis.title.x = element_text(size = 9, margin = margin(5, 0, 5, 0)))+
+      geom_text(aes(x = 1.2, label = percent(pct)),position = position_stack(vjust = 0.5), size= 3, color = lcolor) +  
+    xlab('') + ylab(paste('Total HHA Patients =', y, sep =' ')) + labs(title = 'YOU') +
+    guides(fill = guide_legend(title = ''))  +
+     annotate('text', x = 0, y = -100, label = alabel, size = 4.5, fontface = 'bold')
+  }else{
+    bar_color = 'white'
+    bk = '#F9F8F8'
+    c1 = c('<1 episode' = '#8EAF4E','= 1 episode'= '#FDB748', '2+ episode' = '#C83E37')
+    keywidth = 15
+    keyheight = 15
+    lcolor = 'black'
+  hha %>%
+     filter(ProviderNpi == npi) %>%
+     ggplot( aes(x = '',y = pct, fill = episode_variable)) + 
+     geom_bar(width = 1, stat = "identity", color = bar_color) + 
+     coord_polar('y', start = 0) + 
+     scale_fill_manual(values= c1, drop = FALSE) + 
+     theme_bw() +
+     theme(axis.text = element_blank(),
+           axis.ticks = element_blank(),
+           panel.grid  = element_blank(),
+           panel.border = element_blank(),
+           panel.background = element_rect(fill = bk),
+           legend.text = element_text(size = 9),
+           legend.margin = margin(0,0,0,0),
+           legend.box.margin = margin(-10, 0, -20, -10),
+           legend.position = 'bottom',
+           legend.background =element_rect(fill = bk),
+           legend.key = element_blank(),
+           legend.key.height = unit(keyheight, "pt"),
+           legend.key.width = unit(keywidth, 'pt'),
+           plot.title = element_text(size = 10, hjust = 0.5, face = 'bold'),
+           plot.background = element_rect(fill = bk),
+           plot.margin = margin(20,45,20,40, 'pt'),
+           axis.title.x = element_text(size = 9, margin = margin(5, 0, 5, 0)))+
+    geom_text(aes(x = 1.2, label = percent(pct)),position = position_stack(vjust = 0.5), size= 3, color = lcolor) + 
+    xlab('') + ylab(paste('Total HHA Patients =', y, sep =' ')) + labs(title = 'YOU') +
+    guides(fill = guide_legend(title = '')) 
+  }
+}
+#  hhachart_func(hha4, '1124058169')
+# hhachart_func(hha4, '1386751857')
+```
+```{r}
+#5.Total table
+ #total cost table
+ttb_func <- function(ttb, npi){
+    ttb2 = tot_tb2_func(ttb, npi)
+    
+    kable(ttb2,'html',align = 'c') %>%
+      kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), position = 'center', full_width = TRUE, font_size = 10) %>%
+      add_header_above(c( "ER Visits" = 2, "Part B Procedures" = 2, "SNF Fac." = 2, "Part B Drugs" = 2, "MRI" = 2), bold = TRUE, color = 'white', background = '#1799CD', font_size = 12)%>%
+    row_spec(0,bold = TRUE,  color = 'white', background = '#1799CD', font_size = 11) %>%
+      row_spec(c(1,3),bold = TRUE, font_size = 11) 
+}
+#ttb_func(ttb, pnpi)
+#6.Final chart
+chart4_func <- function(ttb, npi){
+  ttb$cost_per_pat = as.numeric(ttb$cost_per_pat)
+
+  #multiple bar plots
+  ttb  %>%
+    mutate(Provider = ifelse(ProviderName !='ACO','YOU', 'ACO')) %>%
+    filter(ProviderNpi %in% c(npi, '9999999999')) %>%
+    ggplot(aes(category, cost_per_pat, fill = factor(paste(Provider, '               ')))) +
+    geom_bar(position = position_dodge(width = 0.6), stat = 'identity',width = 0.5) +
+    scale_fill_manual(values= alpha(c('#1799CD', '#FDB748'), 1), drop = FALSE) +
+    scale_x_discrete(limits = c('ER Visits', 'Part B Procedures', 'SNF Fac.', 'Part B Drugs', 'MRI'))+
+    scale_y_continuous(breaks = pretty(ttb$cost_per_pat, n = 10),
+                       labels = function(x) paste('$',format(x, big.mark = ','), sep = '')) +
+    theme_bw() + 
+    theme(axis.text.x = element_text(size = 9.5, face = 'bold'),
+          axis.title.y = element_text(size = 10, face = 'bold'),
+          axis.text.y = element_text(size = 9),
+          panel.border = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.major.y = element_line(size = 0.1, color = 'grey', linetype = 'dashed'),
+          plot.background = element_rect(fill = '#F9F8F8'),
+          panel.background = element_rect(fill = '#F9F8F8'),
+          legend.background =element_rect(fill = '#F9F8F8'),
+          legend.text = element_text(size = 9),
+          legend.position = 'bottom',
+          legend.box.margin = margin(-10, 0, -10, -10)) +
+    geom_text(aes(label = format(cost_per_pat, big.mark = ',')),position=position_dodge(width=0.6), vjust=-0.25, size = 3) +
+    labs(title = '',x = '', y = 'Cost per Patient') +
+    guides(fill = guide_legend(title = ''))
+}
+#chart4_func(ttb, pnpi)
+```
+```{r include = FALSE}
+#assign provider npi to get individual report
+i = 3
+pnpi = provider_tba$ProviderNpi[3]
+aco = '9999999999'
+```
+<br>
+<br>
+```{r echo = FALSE, out.width = '100%'}
+knitr:: include_graphics('C:/Users/tianyi.fang/Desktop/TF/projects/ACO/Gap Analysis/DESIGN/header2019Q2.JPG')
+```
+This dashboard is designed to help you focus your efforts at practice engineering or other activities to optimize the chance you earn shared savings in 2019. The charts below summarize your performance in 4 areas which are critical to the ACO's success.
+<br>
+<center> <h5>**Provider Overview** </h5> </center>
+```{r message = FALSE, warning=FALSE, strip.white= TRUE, fig.width= 18}
+overview_func(provider_tba, pnpi)
+```
+
+```{r message = FALSE, warning=FALSE}
+
+awv_g= gap_chart_function(awv, 'AWV', pnpi)
+ad_g = gap_chart_function(ad, 'AD', pnpi)
+ai_p = pie_aco_func(inpat_obs2, 'IO', 'Frequency Count' )
+pi_p = pie_chart_function(inpat_obs2,pnpi, 'IO', 'Frequency Count' )
+
+```
+
+```{r message = FALSE, warning=FALSE, fig.width = 14, fig.height= 3,fig.margin = TRUE,  fig.align='center', fig.ncol = 7, out.width = '100%'}
+
+plot_grid(awv_g,NULL,ad_g, NULL,ai_p,NULL, pi_p, nrow = 1, align = 'hv', rel_widths = c(1,0.02, 1, 0.02, 1, 0.02, 1))
+
+```
+```{r message = FALSE, warning=FALSE, fig.width = 14, fig.height= 3,fig.margin = TRUE,  fig.align='center', fig.ncol = 7, out.width = '100%'}
+plot_grid(awv_g,NULL,ad_g, NULL, ai_p,NULL, pi_p,  nrow =  1, rel_widths = c(1,0.02,1, 0.02,1, 0.02, 1),align = 'hv')
+
+#ai_p
+```
+
+Goal 1: 100% of beneficiaries receive Annual Wellness Visit and Advance Directive Counseling.\ \
+Goal 2: Admit to observation whenever appropriate (0-1 Midnights)
+<br>
+<br>
+```{r message = FALSE, warning=FALSE}
+ah_p = hhachart_aco_func(hha4)
+ph_p = hhachart_func(hha4, pnpi)
+ap_p = pie_aco_func(preferred_2, 'PP', 'Frequency Count')
+pp_p = pie_chart_function(preferred_2, pnpi, 'PP', 'Frequency Count')
+
+```
+```{r message = FALSE, warning=FALSE, fig.width = 14, fig.height= 3, fig.margin = TRUE,fig.align='center',fig.ncol = 7, out.width = "100%"}
+plot_grid(ah_p,  ph_p, ap_p, pp_p,nrow = 1, axis = 'l', align = 'hv')
+```
+
+Goal 3A: Certify 0-4 home health visits whenever appropriate. \ \
+Goal 3B: Usage of Preferred Home Health Agencies -- ASSISTED HOME CARE & LOS ROBLES HOMECARE SERVICES INC THOUSAND SERVICES.
+
+```{r message = FALSE, warning=FALSE, include = FALSE}
+ttb =tot_tb_func(provider_tba, mri, erv, snf, bproc, bdrug)
+```
+<br>
+<br>
+```{r echo = FALSE, out.width = '100%'}
+knitr:: include_graphics('C:/Users/tianyi.fang/Desktop/TF/projects/ACO/Gap Analysis/DESIGN/header2019Q2.JPG')
+```
+This dashboard is designed to help you focus your efforts at practice engineering or other activities to optimize the chance you earn shared savings in 2019. The charts below summarize your performance in 4 areas which are critical to the ACO's success.
+<br>
+<br>
+```{r message = FALSE, warning=FALSE,fig.height = 4, fig.width=14, fig.align='center', out.width = "100%"}
+#Other measures bar chart
+chart4_func(ttb, pnpi)
+```
+```{r message = FALSE, warning=FALSE, fig.width= 18}
+#Total Table
+ttb_func(ttb, pnpi)
+```
+
+
+Goal 4: Reduced costs in areas the VCFMC ACO has significantly higher costs than the national ACO Average
+<br><br>
+Based on our analytics, the data show the expense/utilization of your patients compared to other ACO physicians/clinicians as shown above. We understand there will be an obvious medical need for these expenses in many cases but we suggest you review the data for areas where your expenses are higher than ACO average to see where you might focus your efforts to provide care which is both **excellent** and **efficient**.
+
+
+
+
+
