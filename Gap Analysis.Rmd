@@ -697,11 +697,6 @@ pi_p = pie_chart_function(inpat_obs2,pnpi, 'IO', 'Frequency Count' )
 plot_grid(awv_g,NULL,ad_g, NULL,ai_p,NULL, pi_p, nrow = 1, align = 'hv', rel_widths = c(1,0.02, 1, 0.02, 1, 0.02, 1))
 
 ```
-```{r message = FALSE, warning=FALSE, fig.width = 14, fig.height= 3,fig.margin = TRUE,  fig.align='center', fig.ncol = 7, out.width = '100%'}
-plot_grid(awv_g,NULL,ad_g, NULL, ai_p,NULL, pi_p,  nrow =  1, rel_widths = c(1,0.02,1, 0.02,1, 0.02, 1),align = 'hv')
-
-#ai_p
-```
 
 Goal 1: 100% of beneficiaries receive Annual Wellness Visit and Advance Directive Counseling.\ \
 Goal 2: Admit to observation whenever appropriate (0-1 Midnights)
