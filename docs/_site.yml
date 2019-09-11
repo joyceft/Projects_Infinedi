@@ -1,0 +1,12 @@
+name: "Gap Analysis"
+output_dir: "docs"
+navbar:
+ title :"Infinedi Projects"
+ left:
+ - text : "Home"
+ href: index.html
+ - text : "Gap Analysis"
+ href: Gap-Analysis.html
+output:
+  html_document:
+ theme: cosmo
