@@ -1,0 +1,935 @@
+---
+title: "WebAnalytics AllState Uploading"
+author: "TF"
+date: "Feb 15, 2019"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r echo = FALSE}
+##this file's functions are all final ones, the test and detailed ones are in all_sample1.rmd
+# rm(list = ls())
+# .rs.restartR()
+# gc()
+# memory.size()
+```
+```{r echo = FALSE, include=FALSE}
+#ss= Sys.time()
+setwd("C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\Mobile Application - Infninedi Analytics")
+library('RODBC')
+library('sqldf')
+library('dplyr')
+library('rlang')
+library('tibble')
+library('RSQLS')
+
+erachannel = odbcConnect('ERAdatabase')
+clmprochannel = odbcConnect('ClaimProcessing_Database')
+webanalyticsDEVchannel <- odbcConnect("WebAnalytics_DEV")
+webanalyticsAAGchannel <- odbcConnect("WebAnalytics_AAG")
+
+all_provider = sqlQuery(webanalyticsAAGchannel, "SELECT * FROM Active_ClientProvider",stringsAsFactors = FALSE)
+```
+# Web Analytics Monthly Uploading Report -- for Small claim amount States
+
+1.Execute state_y group
+```{r echo = FALSE, include = TRUE}
+#state_y = c("'FL'") #multiple State
+state_y = c(j)
+print(state_y)
+enddate = paste(paste0("'", format(Sys.Date(), "%Y-%m-01"), "'"), collapse = ',') #first day of current month
+prestartdate = paste(paste0("'", format(Sys.Date()-30,"%Y-%m-01" ), "'"), collapse = ',') #first day of last month
+pre3startdate = paste(paste0("'", format(Sys.Date()-120,"%Y-%m-01" ), "'"), collapse = ',') #first day of last 3 month
+
+# round 5: 'SD', 'AR', 'WI'
+# round 6: 'CA', 'MD'
+# round 7: 'IL', 'PA'
+# round 8: 'MO', 'KY'
+# round 9: 'VA', 'FL'
+# round 10: 'MN', 'TX'
+SS= Sys.time()
+```
+## Claim Processing
+
+### Chunk 1.1 Get previous month claims for selected group of States (SQL -> R)
+```{r echo = FALSE}
+#1.Claim date, provider, patient, diagnosis, NO payerS
+s = Sys.time()
+all_clmJ1 = sqlQuery(clmprochannel, sprintf(
+"WITH 
+clm_patient AS
+(
+SELECT acp.PracticeState, cpc.ClientCode, cpc.TraceNumber, cpc.ClaimId, cpc.ClaimStatusId, CAST(ReceivedDate AS DATE) AS ReceivedDate, CAST(TransmitDate AS DATE) AS TransmitDate,  cpc.ParentClaimId, 
+cpcd.ProviderId,cpci.IdentifierValue AS PatAcctNum, cpcp.FirstName AS PatFirstName,LEFT(cpcp.MiddleInitial,1) AS PatMidInitial, cpcp.LastName AS PatLastName, cpcp.Gender AS PatGender, CAST(cpcdd1.DateStart AS DATE) AS PatDOB, cpcp.PersonTypeId
+    FROM ClaimProcessing.dbo.claim as cpc
+    INNER JOIN claimprocessing.dbo.ClaimDoctor as cpcd WITH(INDEX(IX_ClaimDoctor_ClaimId)) ON cpc.ClaimId = cpcd.ClaimId
+	INNER JOIN InfinediAnalytics.dbo.Active_ClientProvider AS acp with(index(IX_ActiveClientProvider_ProviderId_ClientCode)) ON cpcd.ProviderId = acp.ProviderId AND cpc.ClientCode = acp.ClientCode
+    INNER JOIN ClaimProcessing.dbo.ClaimIdentifier as cpci with(index(IX_ClaimIdentifer_ClaimId_identifierType)) ON cpc.ClaimId = cpci.ClaimId 
+    INNER JOIN claimprocessing.dbo.claimperson as cpcp with(index(IX_ClaimPerson_ClaimId)) ON cpc.ClaimId = cpcp.ClaimId 
+    INNER JOIN claimprocessing.dbo.claimdate as cpcdd1 with(index(IX_ClaimDate_ClaimPersonId)) ON cpcp.ClaimPersonId = cpcdd1.ClaimPersonId
+    where cpc.ClaimTypeId = 1 AND ClaimStatusid = 8100
+and cpc.receiveddate >= (%s) and cpc.receiveddate < (%s) 
+AND acp.PracticeState in (%s)
+
+and cpci.IdentifierTypeId = 68  
+	AND cpcp.PersonTypeId  = 1  
+	AND cpcdd1.DateTypeId = 42
+ 
+), 
+clm_subscriber AS
+(
+SELECT acp.PracticeState, cpc.ClientCode, cpc.TraceNumber, cpc.ClaimId, cpc.ClaimStatusId, CAST(ReceivedDate AS DATE) AS ReceivedDate, CAST(TransmitDate AS DATE) AS TransmitDate,  cpc.ParentClaimId, 
+cpcd.ProviderId,cpci.IdentifierValue AS PatAcctNum, cpcp.FirstName AS PatFirstName,LEFT(cpcp.MiddleInitial,1) AS PatMidInitial, cpcp.LastName AS PatLastName, cpcp.Gender AS PatGender, CAST(cpcdd1.DateStart AS DATE) AS PatDOB, cpcp.PersonTypeId
+    FROM ClaimProcessing.dbo.claim as cpc
+    INNER JOIN claimprocessing.dbo.ClaimDoctor as cpcd WITH(INDEX(IX_ClaimDoctor_ClaimId)) ON cpc.ClaimId = cpcd.ClaimId 
+	  INNER JOIN InfinediAnalytics.dbo.Active_ClientProvider AS acp with(index(IX_ActiveClientProvider_ProviderId_ClientCode)) ON cpcd.ProviderId = acp.ProviderId AND cpc.ClientCode = acp.ClientCode 
+    INNER JOIN ClaimProcessing.dbo.ClaimIdentifier as cpci with(index(IX_ClaimIdentifer_ClaimId_identifierType)) ON cpc.ClaimId = cpci.ClaimId 
+    INNER JOIN claimprocessing.dbo.claimperson as cpcp with(index(IX_ClaimPerson_ClaimId)) ON cpc.ClaimId = cpcp.ClaimId 
+    INNER JOIN claimprocessing.dbo.claimdate as cpcdd1 with(index(IX_ClaimDate_ClaimPersonId)) ON cpcp.ClaimPersonId = cpcdd1.ClaimPersonId
+    where cpc.ClaimTypeId = 1 AND ClaimStatusid = 8100  
+and cpc.receiveddate >= (%s) and cpc.receiveddate < (%s)   
+AND acp.PracticeState in (%s)
+
+  AND cpci.IdentifierTypeId = 68 
+	AND cpcp.PersonTypeId = 2 and cpcp.RelationshipTypeId = 9
+	AND cpcdd1.DateTypeId = 42 
+
+
+), 
+
+Jclm_all AS
+(SELECT * FROM clm_patient 
+UNION 
+ SELECT * FROM clm_subscriber 
+ ),
+
+Jclm1 AS
+ (SELECT *
+FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY ClaimId ORDER BY PersonTypeId) rn
+      FROM Jclm_all 
+	  ) AS tt
+WHERE rn = 1
+)
+
+SELECT * FROM Jclm1", prestartdate, enddate, state_y, prestartdate, enddate, state_y), stringsAsFactors = FALSE)
+e = Sys.time()
+print(paste('Time for get all claim_table1 is:',e-s)) #41.451   
+
+#2.service data, proccode, billed, unit
+s = Sys.time()
+all_clmJ2 = sqlQuery(clmprochannel, 
+sprintf("SELECT distinct cpc.ClaimId, cpcm1.AmountValue AS ClaimBilled, cpcs.ClaimServiceLineId AS ClaimSrvLineId, CAST(cpcdd2.DateStart AS DATE) AS SrvStartDate, CAST(cpcdd2.DateEnd AS DATE) AS SrvEndDate, cpcs.ProcCodeValue AS ProcCode, cpcs.ProcModifier1, cpcs.ProcModifier2, cpcs.Unit, cpcm2.AmountValue AS ProcBilled 
+  FROM ClaimProcessing.dbo.claim as cpc
+  INNER JOIN claimprocessing.dbo.ClaimDoctor as cpcd2 WITH(INDEX(IX_ClaimDoctor_ClaimId)) ON cpc.claimid = cpcd2.claimid
+  INNER JOIN InfinediAnalytics.dbo.Active_ClientProvider AS acp with(index(IX_ActiveClientProvider_ProviderId_ClientCode)) ON cpcd2.ProviderId = acp.ProviderId AND cpc.ClientCode = acp.ClientCode
+  INNER JOIN claimProcessing.dbo.claimamount as cpcm1 WITH(INDEX(IX_ClaimAmount_ClaimId)) ON cpc.claimid = cpcm1.claimid
+  INNER JOIN claimprocessing.dbo.ClaimServiceLine as cpcs WITH(INDEX(IX_ClaimServiceLine_ClaimId)) ON cpc.Claimid = cpcs.Claimid
+  INNER JOIN claimprocessing.dbo.claimdate as cpcdd2 WITH(INDEX(IX_ClaimDate_ClaimServiceLineId)) ON cpcdd2.ClaimServiceLineId = cpcs.ClaimServiceLineId 
+  INNER JOIN claimProcessing.dbo.claimamount as cpcm2 WITH(INDEX(IX_ClaimAmount_ClaimServiceLineId)) ON cpcS.ClaimServiceLineId = cpcm2.ClaimServiceLineId 
+    where cpc.ClaimTypeId = 1 AND ClaimStatusid = 8100 
+and cpc.receiveddate >= (%s) and cpc.receiveddate < (%s) 
+AND acp.PracticeState in (%s)
+AND cpcm1.AmountTypeId = 1 AND  cpcdd2.Datetypeid = 39 AND cpcm2.AmountTypeId = 5 ", prestartdate, enddate, state_y), stringsAsFactors = FALSE)
+e = Sys.time()
+print(paste('Time for get all claim_table2 is:',e-s))
+
+#3.patInsId, BillingNpi
+s = Sys.time()
+all_clmJ3 = sqlQuery(clmprochannel, sprintf("SELECT distinct cpc.ClaimId, cpcd.Npi as BillingNpi, cpci.IdentifierValue AS PatInsId
+  from claimProcessing.dbo.claim as cpc
+  INNER JOIN claimprocessing.dbo.ClaimDoctor as cpcd WITH(INDEX(IX_ClaimDoctor_ClaimId)) ON cpc.ClaimId = cpcd.ClaimId 
+  INNER JOIN claimprocessing.dbo.ClaimDoctor as cpcd2 WITH(INDEX(IX_ClaimDoctor_ClaimId)) ON cpc.claimid = cpcd2.claimid 
+  INNER JOIN InfinediAnalytics.dbo.Active_ClientProvider AS acp with(index(IX_ActiveClientProvider_ProviderId_ClientCode)) ON cpcd2.ProviderId = acp.ProviderId
+AND cpc.ClientCode = acp.ClientCode
+  INNER JOIN claimprocessing.dbo.claimperson as cpcp WITH(INDEX(IX_ClaimPerson_ClaimId))on cpc.claimid = cpcp.claimid 
+  INNER JOIN claimprocessing.dbo.ClaimIdentifier as cpci WITH(INDEX(IX_ClaimIdentifier_ClaimPersonId)) ON cpci.ClaimPersonId = cpcp.claimpersonid 
+    where cpc.ClaimTypeId = 1 AND ClaimStatusid = 8100 
+and cpc.receiveddate >= (%s) and cpc.receiveddate < (%s)  
+AND acp.PracticeState in (%s)
+and cpcd.ProviderTypeId = 1 and cpcp.PersonTypeId = 2 and cpci.IdentifierTypeId = 41", prestartdate, enddate, state_y), stringsAsFactors = FALSE)
+e = Sys.time()
+print(paste('Time for get all claim_table3 is:',e-s))
+
+#4.PrimaryDiagCode
+s = Sys.time()
+all_clmJ4 = sqlQuery(clmprochannel, sprintf(" SELECT tt.ClaimId, tt.DiagnosisCode AS PrimaryDiagCode, tt.DiagTypeId
+FROM (SELECT cpc.ClaimId,cpcdd.DiagnosisCode,cpcdd.DiagnosisTypeId AS DiagTypeId, ROW_NUMBER() OVER (PARTITION BY cpc.ClaimId ORDER BY cpcdd.ClaimDiagnosisId) rnk
+    FROM [ClaimProcessing].[dbo].[Claim] AS cpc
+    INNER JOIN claimprocessing.dbo.ClaimDoctor as cpcd WITH(INDEX(IX_ClaimDoctor_ClaimId)) ON cpc.claimid = cpcd.claimid 
+    INNER JOIN InfinediAnalytics.dbo.Active_ClientProvider AS acp with(index(IX_ActiveClientProvider_ProviderId_ClientCode)) ON cpcd.ProviderId = acp.ProviderId AND cpc.ClientCode = acp.ClientCode
+	INNER JOIN [ClaimProcessing].[dbo].[ClaimDiagnosisCode] AS cpcdd WITH(INDEX(IX_ClaimDiagnosisCode_ClaimId)) 
+      ON cpc.ClaimId = cpcdd.ClaimId
+    where  cpc.ClaimTypeId = 1 AND ClaimStatusid = 8100 
+and cpc.receiveddate >= (%s) and cpc.receiveddate < (%s) 
+AND acp.PracticeState in (%s)
+
+	  ) AS tt
+WHERE rnk = 1", prestartdate, enddate, state_y), stringsAsFactors = FALSE)
+e = Sys.time()
+print(paste('Time for get all claim_table4 is:',e-s))
+#-- AND acp.PracticeState in (s%)
+# --AND acp.PracticeState = 'OK' AND left(acp.clientcode,1) like %s
+```
+
+### Chunk 1.2 Combine tables, Clean format 
+```{r echo = FALSE, include = TRUE}
+change_clmtype_func <- function(tb){
+     tb$SrvStartDate =as.Date(as.character(tb$SrvStartDate), format = "%Y-%m-%d")
+     tb$SrvEndDate = as.Date(as.character(tb$SrvEndDate), format = "%Y-%m-%d")
+     tb$PatDOB = as.Date(as.character(tb$PatDOB), format = "%Y-%m-%d")
+     tb$ReceivedDate = as.Date(as.character(tb$ReceivedDate), format = "%Y-%m-%d")
+     tb$TransmitDate =as.Date(as.character(tb$TransmitDate), format = "%Y-%m-%d")
+     #fill missing SrvEndDate with SrvStartDate
+     tb$SrvEndDate[is.na(tb$SrvEndDate)] <- tb$SrvStartDate[is.na(tb$SrvEndDate)]
+     tb$ProcCode = gsub('/.*', '',tb$ProcCode)
+     #change factor into character
+     i = sapply(tb, is.factor)
+     tb[i] <- lapply(tb[i], as.character)
+     #deal with the special character first for all claims
+      tb$PatFirstName = gsub('[[:punct:]]', '',tb$PatFirstName) #remove all special character
+      tb$PatLastName = gsub('[[:punct:]]', '',tb$PatLastName)
+      tb$PatMidInitial = gsub('[[:punct:]]', '',tb$PatMidInitial)
+      tb$PatMidInitial[tb$PatMidInitial ==''|tb$PatMidInitial ==' '] <- NA
+      tb$PatFirstName[tb$PatFirstName ==''|tb$PatFirstName ==' '] <- NA
+      tb$PatFirstName = toupper(tb$PatFirstName)
+      tb$PatLastName = toupper(tb$PatLastName)
+      tb$PatMidInitial = toupper(tb$PatMidInitial)
+      j = sapply(tb, is.character) # remove all leading/tailing whitespace
+      tb[j] <- lapply(tb[j], trimws, which = 'both')
+     return(tb)
+}
+s= Sys.time()
+new_clm = inner_join(all_clmJ1, all_clmJ2, by = c('ClaimId')) %>%
+  inner_join(all_clmJ3, by = c('ClaimId')) %>%
+  inner_join(all_clmJ4, by = c('ClaimId'))
+new_clm = change_clmtype_func(new_clm)
+
+e=Sys.time()
+# new_clm %>%
+#   group_by(ClientCode) %>%
+#   summarise(mindate = min(ReceivedDate))
+print(paste('There are', nrow(new_clm), 'rows in Claim Processing table'))
+print(paste('Time is:',e-s))
+```
+### Chunk 1.3 Getting Existed Patient_tb(for the same group of states)
+```{r echo = FALSE, include = TRUE}
+change_pattb_type <- function(tb) {
+  i = sapply(tb, is.factor)
+  tb[i] <- lapply(tb[i], as.character)
+  tb$PatDOB = as.Date(as.character(tb$PatDOB), format = "%Y-%m-%d")
+  tb$FirstShowDate = as.Date(as.character(tb$FirstShowDate), format = "%Y-%m-%d")
+
+   j = sapply(tb, is.character)
+   tb[j] <- lapply(tb[j], trimws, which = 'both')
+
+}
+
+s = Sys.time()
+patient_tb = sqlQuery(webanalyticsAAGchannel, sprintf(
+"select v1.* from [InfinediAnalytics].[dbo].[V1Patient_tb] as v1 
+inner join Active_ClientProvider as acp on acp.ClientCode = v1.ClientCode and acp.ProviderId = v1.ProviderId
+where acp.PracticeState in (%s)", state_y))
+#WHERE acp.PracticeState in (%s)
+#WHERE acp.PracticeState = 'OK' AND left(acp.clientcode,1) like %s
+i = sapply(patient_tb, is.factor)
+patient_tb[i] <- lapply(patient_tb[i], as.character)
+patient_tb$PatDOB = as.Date(as.character(patient_tb$PatDOB), format = "%Y-%m-%d")
+patient_tb$FirstShowDate = as.Date(as.character(patient_tb$FirstShowDate), format = "%Y-%m-%d")
+j = sapply(patient_tb, is.character)
+patient_tb[j] <- lapply(patient_tb[j], trimws, which = 'both')
+# patient_tb1 = change_pattb_type(patient_tb)
+e= Sys.time()
+print(paste('Time for getting Existed Patient_tb is:',e-s))
+
+```
+
+### Chunk 1.4 Find the new patients and assign new patientid for them
+```{r echo = FALSE, include = TRUE}
+s = Sys.time()
+new_patient_check_func <- function(tb, pat_tb){
+ #1.DataType Convert
+      tb_pat= tb[,c('ClaimId', 'ClientCode','ProviderId', 'PatFirstName','PatMidInitial', 'PatLastName', 'PatGender', 'PatDOB')] %>%
+        arrange(ClaimId) %>%
+        as.data.frame() %>%
+        distinct()
+ #2.still check new patient his/her gender, find patient with 2 genders
+      U_pat = tb_pat %>%
+         filter(PatGender =='U') %>%
+         left_join(tb_pat, by =c('ClientCode','ProviderId', 'PatFirstName','PatMidInitial', 'PatLastName', 'PatDOB')) %>%
+         filter(PatGender.y !='U') 
+print('Corrected Patient Gender List')
+print(unique(U_pat %>%select(ClientCode, ProviderId, PatFirstName, PatLastName, PatDOB, PatGender.y)))
+
+#3. Convert for 2 gender
+      tb_pat$PatGender[tb_pat$PatGender =='U'] <- U_pat$PatGender.y[match( tb_pat$ClaimId[tb_pat$PatGender =='U'], U_pat$ClaimId.x)]
+      tb_pat$PatGender[is.na(tb_pat$PatGender)] <- 'U'
+      tb_pat1 = tb_pat %>%
+                   select(-ClaimId) %>%
+                   distinct()
+#4.join with patient_tb to see whether patients are in patient_tb
+# first find the max id of patientid for each clientCode, since each patientid is arranged to each clientcode
+      #notice there will be some id missing in the middle, like MIG134, MIG 136..
+      max_patid = pat_tb %>%
+         mutate(old_id = as.numeric(gsub('[^0-9]', '', PatientId))) %>%
+         group_by(ClientCode) %>%
+         dplyr::summarise(max_patid = max(old_id)) 
+
+print('max id for each clientcode')
+print(head(max_patid)) 
+
+#check whether there are existing patients in pat_tb
+      tb_pat2 = tb_pat1 %>%
+         left_join(pat_tb %>%select(-FirstShowDate),
+                 by = c('ClientCode', 'ProviderId', 'PatFirstName', 'PatMidInitial', 'PatLastName', 'PatDOB', 'PatGender'))
+#5.assign new patientid for new coming patients, ID is based on each client and provider, but the format will be Client+id
+      new_pat = unique(tb_pat2%>%
+          filter(is.na(PatientId)))  %>%
+          left_join(max_patid, by = 'ClientCode') %>%
+          group_by(ClientCode) %>%
+          mutate(max_patid = ifelse(is.na(max_patid), 0, max_patid))%>%#IN case there are new clientcode, without max_patid
+          mutate(id =  as.numeric(max_patid + row_number()))
+      new_pat$PatientId = gsub("\\s+", "", apply(new_pat[, c('ClientCode', 'id')], 1, paste0, collapse = ""))
+      new_pat = as.data.frame(new_pat)
+
+#6.combine all patient information for this month
+      new_tb = unique(tb_pat2 %>%
+          select(c(ClientCode, ProviderId, PatFirstName, PatMidInitial, PatLastName, PatDOB, PatGender, PatientId)))%>%
+          filter(!is.na(PatientId)) %>%
+          bind_rows(new_pat %>%select(-c(max_patid, id))) %>%
+          inner_join(tb , by =c('ClientCode', 'ProviderId', 'PatFirstName', 'PatMidInitial', 'PatLastName', 'PatDOB', 'PatGender'))
+      i = sapply(new_tb, is.factor)
+      new_tb[i] = lapply(new_tb[i], as.character)
+#after get patientid and firstshowdate for new coming patient, append them to the dbo.patient_tb, then again, join new_pat3 with new_clm, to assign patientid.
+     return(list(new_pat, new_tb))
+}
+ #test 
+ new_result1 = new_patient_check_func(new_clm, patient_tb)
+ new_pat = new_result1[[1]]
+ new_clm1 = new_result1[[2]]
+ print('Check Criteria1: Whehter 1 patient has multiple PatientId: Expect result: 0 X 8 ')
+new_pat %>%
+  group_by(ClientCode, ProviderId, PatFirstName, PatMidInitial, PatLastName, PatGender, PatDOB) %>%
+  dplyr::summarise(cnt = n_distinct(PatientId)) %>%
+  filter(cnt>1)
+print('Check Criteria2: Whehter PatientId is assigned to multiple people: Expect result: 0 X 8')
+new_pat %>%
+ group_by(PatientId) %>%
+   dplyr::summarise(cnnt = n_distinct(PatFirstName)) %>%
+   filter(cnnt>1)
+ # new_clm[is.na(new_clm$PatGender),]
+```
+### chunk 1.5 Clean and Formatting and then Push new patient_tb to SQLdev\mssqldev2014(R ->SQL)
+```{r echo = FALSE, include = TRUE}
+s= Sys.time()
+new_push_patient = unique(new_clm1 %>%
+       select(ClientCode, ProviderId, PatFirstName, PatMidInitial, PatLastName, PatGender, PatDOB, ReceivedDate) %>%
+       inner_join(new_pat %>%select(-c(max_patid, id)), by = c('ClientCode', 'ProviderId', 'PatFirstName', 'PatMidInitial', 'PatLastName', 'PatDOB', 'PatGender')) %>%
+       group_by(PatientId) %>%
+       mutate(FirstShowDate = min(ReceivedDate)) %>%
+       select(-ReceivedDate))
+e= Sys.time()
+e-s
+# length(unique(new_pat$PatientId))
+# length(new_push_patient$PatientId)
+# unique(new_pat[!new_pat$PatientId %in% new_push_patient$PatientId, ])
+devcon = set_connString('SQLDEV2014\\MSSQLDEV2014','InfinediAnalytics')
+push_data(devcon, new_push_patient, "dbo.V1Patient_tb", append = TRUE, showprogress = TRUE)
+
+```
+
+### chunk 1.6 Assign other ids and clm_length for clm_LOAD table
+```{r echo = FALSE, include = TRUE}
+s=Sys.time()
+new_clm1 = all_provider %>%
+      select(ClientState, ClientCode, ProviderId,Npi, TaxonomyCode, TaxonomyTypeId) %>%
+      as.data.frame() %>%
+      distinct() %>%
+      inner_join(new_clm1, by = c('ClientCode', 'ProviderId'))%>%
+      mutate(VisitId = gsub('\\s+', '',paste(ClientCode, ProviderId, PatientId, SrvStartDate, sep = "_")),
+             DiagId = gsub('\\s+', '',paste(ClientCode, ProviderId, PatientId, PrimaryDiagCode, sep = "_")),
+             ProcMod =gsub('\\s+', '',paste(ProcCode,ProcModifier1, sep = "_"))) %>%
+      mutate(ProcedureId =gsub('\\s+', '',paste(VisitId, ProcMod, sep = "_")))
+new_clm1$RecMonth = strtrim(months(new_clm1$ReceivedDate), 3)
+
+new_clm1_LOAD =new_clm1 %>%
+      group_by(ClaimId) %>%
+      mutate(clm_length =  as.numeric(ReceivedDate - SrvEndDate, units = 'days')) %>%
+      select(c(ClientCode, ProviderId, ReceivedDate, ProcedureId, ClaimId, ClaimSrvLineId, clm_length, RecMonth)) %>%
+      as.data.frame() %>%
+      distinct()
+
+e= Sys.time()
+print(paste('Time for Assign other ids and clm_length for clm_LOAD table is:',e-s))
+```
+### chunk 1.7 Deal with Parent Claims 
+```{r echo = FALSE, include = TRUE}
+s= Sys.time()
+drop_parent_func <- function(tb){
+   t2 = tb %>%
+      group_by(TraceNumber) %>%
+      dplyr::summarise(latest_clm = max(ClaimId)) %>%
+      filter(latest_clm %in% tb$ParentClaimId)
+#print(t2)
+   new_tb = tb %>%
+      filter(!TraceNumber %in% t2$TraceNumber)%>%
+      group_by(TraceNumber) %>%
+      dplyr::summarise(latest_clm = max(ClaimId)) %>%
+      left_join(tb, by = c('TraceNumber' = 'TraceNumber', 'latest_clm' = 'ClaimId')) %>%
+      select(-ParentClaimId)
+   colnames(new_tb)[colnames(new_tb)=='latest_clm'] <- 'ClaimId'
+   return(new_tb)
+ }
+new_clm2 = drop_parent_func(new_clm1)
+e= Sys.time()
+print(paste(' Deal with Parent Claims:',e-s))
+```
+
+### chunk 1.8 Assign new EpisodeId or Updating old EpisodeId
+
+```{r echo = FALSE, include = TRUE}
+Episode_tb = sqlQuery(webanalyticsAAGchannel, sprintf("SELECT EpisodeId, MAX(SrvEndDate) AS LastSrvDate FROM [InfinediAnalytics].[dbo].[V1ClaimProcessing] as cp inner join Active_ClientProvider as acp on cp.ClientCode = acp.ClientCode and cp.ProviderId = acp.ProviderId WHERE acp.PracticeState in (%s) GROUP BY EpisodeId", state_y), stringsAsFactors = FALSE)
+#WHERE acp.PracticeState = 'OK' AND left(acp.clientcode,1) like %s
+#split EpisodeId
+library(tidyr)
+ Episode_tb = Episode_tb %>% 
+   separate(EpisodeId,into = c('id', 'ClientCode', 'ProviderId', 'PatientId', 'PrimaryDiagCode'), sep = "_") %>%
+   mutate(LastSrvDate = as.Date(as.character(LastSrvDate), format = "%Y-%m-%d"), 
+          ProviderId = as.integer(ProviderId),
+          id  = as.numeric(id),
+          DiagId = gsub('\\s+', '',paste(ClientCode, ProviderId, PatientId, PrimaryDiagCode, sep = "_")))
+ 
+ head(unique(Episode_tb%>%
+   select(-c(ClientCode, ProviderId, PatientId, PrimaryDiagCode))))
+#only need the DiagId, SrvStartDate
+Episode_tb1 = unique(Episode_tb%>%
+   select(-c(ClientCode, ProviderId, PatientId, PrimaryDiagCode))) 
+
+# new_epi = unique(new_clm2  %>%
+#    arrange(ClaimId) %>%
+#   select(DiagId, SrvStartDate, SrvEndDate))
+# #assign id = 1 for all new shown-up diaid, even for new joined Client or provider, every record in this month should be assigned as 1.
+# new_epiid = new_epi %>%
+#    left_join(Episode_tb1, by = c('DiagId')) %>%
+#    filter(is.na(id)) %>%
+#    mutate(id = ifelse(is.na(id), 1, id)) %>%
+#    mutate(EpisodeId = gsub('\\s+', '', paste(id, DiagId, sep = "_"))) %>%
+#    select(-c(LastSrvDate, id)) 
+```
+```{r}
+episode_func <- function(ep_tb, clm2){
+  #ep_tb is existing episode_tb, clm2 is current month claims
+  new_epi = unique(clm2  %>%
+   arrange(ClaimId) %>%
+  select(DiagId, SrvStartDate, SrvEndDate))
+#assign id = 1 for all new shown-up diaid, even for new joined Client or provider, every record in this month should be assigned as 1.
+new_epiid = new_epi %>%
+   left_join(Episode_tb1, by = c('DiagId')) %>%
+   filter(is.na(id)) %>%
+   mutate(id = ifelse(is.na(id), 1, id)) %>%
+   mutate(EpisodeId = gsub('\\s+', '', paste(id, DiagId, sep = "_"))) %>%
+   select(-c(LastSrvDate, id)) 
+
+  if(nrow(ep_tb) != 0){ #exist clients have updated_epiid
+    update_epiid = ep_tb %>%
+      group_by(DiagId) %>%
+      dplyr::summarise(max_id = max(id)) %>%
+      left_join(ep_tb, by = c('max_id' = 'id', 'DiagId' = 'DiagId')) %>%
+      right_join(new_epi, by = 'DiagId') %>% #JOIN with new month, keep only old diag
+      filter(!is.na(max_id)) %>%
+      arrange(DiagId,max_id, LastSrvDate, SrvStartDate, SrvEndDate) %>% #order by date
+       group_by(DiagId,max_id) %>%
+       mutate(row_id = row_number(),
+             epi_int = ifelse(row_id == 1, as.numeric(SrvStartDate-LastSrvDate, units = 'days'),
+                                           as.numeric(SrvStartDate-lag(SrvEndDate, unites = 'days')))) %>%
+       mutate(id = ifelse(row_id == 1 & epi_int >=60, as.numeric(max_id) + 1, max_id))
+    #update
+    for(i in (1: nrow(update_epiid))){
+      if(update_epiid$row_id[i] ==1){new = update_epiid$id[i]}
+       else{
+         if(update_epiid$epi_int[i] >= 60){
+           new = as.numeric(update_epiid$id[i-1]) + 1
+        }else{
+          new = as.numeric(update_epiid$id[i-1])
+         }
+     }
+      update_epiid$id[i] = new
+    }
+    update_epiid = as.data.frame(update_epiid)
+    update_epiid1 = unique(update_epiid %>%
+       mutate(EpisodeId = gsub('\\s+', '', paste(id, DiagId, sep ="_"))) %>%
+       select(c(DiagId, SrvStartDate, SrvEndDate, EpisodeId)))
+    new_clm3 = bind_rows(new_epiid, update_epiid1) %>%
+      left_join(new_clm2, by = c('DiagId', 'SrvStartDate', 'SrvEndDate')) 
+    }
+  else{
+    #for new clients
+     new_clm3 = new_epiid %>%
+      left_join(new_clm2, by = c('DiagId', 'SrvStartDate', 'SrvEndDate')) 
+    }
+ 
+  return(new_clm3)
+}
+new_clm3 = episode_func(Episode_tb1, new_clm2)
+
+```
+
+```{r echo = FALSE, include = TRUE}
+#update for existed diagid
+# s= Sys.time()
+# update_epiid = Episode_tb1 %>%
+#    group_by(DiagId) %>%
+#    dplyr::summarise(max_id = max(id)) %>%
+#    left_join(Episode_tb1, by = c('max_id' = 'id', 'DiagId' = 'DiagId')) %>%
+#    right_join(new_epi, by = 'DiagId') %>% #JOIN with new month, keep only old diag
+#    filter(!is.na(max_id)) %>%
+#    arrange(DiagId,max_id, LastSrvDate, SrvStartDate, SrvEndDate) %>% #order by date
+#    group_by(DiagId,max_id) %>%
+#    mutate(row_id = row_number(),
+#           epi_int = ifelse(row_id == 1, as.numeric(SrvStartDate-LastSrvDate, units = 'days'),
+#                                        as.numeric(SrvStartDate-lag(SrvEndDate, unites = 'days')))) %>%
+#    mutate(id = ifelse(row_id == 1 & epi_int >=60, as.numeric(max_id) + 1, max_id))
+# #update
+#  for(i in (1: nrow(update_epiid))){
+#    if(update_epiid$row_id[i] ==1){new = update_epiid$id[i]}
+#    else{
+#      if(update_epiid$epi_int[i] >= 60){
+#        new = as.numeric(update_epiid$id[i-1]) + 1
+#      }else{
+#        new = as.numeric(update_epiid$id[i-1])
+#      }
+#    }
+#    update_epiid$id[i] = new
+#  }
+# update_epiid = as.data.frame(update_epiid)
+# update_epiid1 = unique(update_epiid %>%
+#    mutate(EpisodeId = gsub('\\s+', '', paste(id, DiagId, sep ="_"))) %>%
+#    select(c(DiagId, SrvStartDate, SrvEndDate, EpisodeId)))
+# 
+# new_clm3 = bind_rows(new_epiid, update_epiid1) %>%
+#    left_join(new_clm2, by = c('DiagId', 'SrvStartDate', 'SrvEndDate')) 
+# 
+# e = Sys.time()
+# print(paste(' Deal with Parent Claims:',e-s))
+```
+### 1.9 Formatting tables then push to SQLDEV ClaimProcessing_LOAD & ClaimProcessing(R ->SQL)
+```{r echo = FALSE, include = TRUE}
+#s = Sys.time()
+colnames(new_clm3)[colnames(new_clm3) =='ClientState'] = 'State'
+clm = new_clm3[, c("ProviderId","ClientCode","PatFirstName","PatLastName","PatGender","PatDOB","PatAcctNum","TraceNumber","ClaimId","ReceivedDate","TransmitDate","PrimaryDiagCode","DiagTypeId","ClaimBilled","ClaimSrvLineId","SrvStartDate","SrvEndDate","ProcCode","ProcModifier1","ProcModifier2","Unit","ProcBilled","PatientId","VisitId","ProcedureId","DiagId","EpisodeId","ProcMod","RecMonth","PatMidInitial","State","TaxonomyCode","TaxonomyTypeId","BillingNpi","PatInsId")] %>%
+  as.data.frame() %>%
+  distinct()
+clm$BillingNpi = as.character(clm$BillingNpi)
+clm$Unit = as.integer(clm$Unit)
+push_data(devcon, new_clm1_LOAD, "dbo.V1ClaimProcessing_LOAD", append = TRUE, showprogress = TRUE)
+push_data(devcon, clm, "dbo.V1ClaimProcessing", append = TRUE, showprogress = TRUE)
+#e = Sys.time()
+
+```
+### 1.10 Prepare for ERA Matching and release R memory
+```{r echo = FALSE, include= FALSE}
+# s= Sys.time()
+# clm_feb = unique(clm %>%
+#                    as.data.frame() %>%
+#   select(ClientCode, ProviderId, PatFirstName, PatLastName, PatAcctNum, TraceNumber, SrvStartDate, ProcCode, BillingNpi, PrimaryDiagCode, PatientId) %>%
+#   mutate(Combined = paste(ClientCode, PatAcctNum, sep = ''))) 
+# e= Sys.time()
+# e-s
+#for ERA match, only need to keep clm, all_provider
+memory.size()
+rm(all_clmJ1, all_clmJ2, all_clmJ3, all_clmJ4, new_clm,clm, Episode_tb, Episode_tb1, new_clm1, new_clm1_LOAD, new_clm2, new_clm3, new_epi, new_epiid, new_pat, new_push_patient, new_result1, patient_tb, update_epiid, update_epiid1)
+gc()
+memory.size()
+```
+### 1.11 Phase II Claim Error
+```{r echo = FALSE, include= TRUE}
+#previous 3 months--for initial operation, for the following month, only grab the previous one month claim error is enough,
+#otherwise, there will be 2 month duplicate.
+# 
+clm_error = sqlQuery(clmprochannel, sprintf("SELECT DISTINCT acp.PracticeState, cpc.ClientCode, cpcd.ProviderId, cpc.TraceNumber, cpc.ClaimId, cpc.ClaimStatusId,cast(cpc.receiveddate as date) as ReceivedDate, cast(cpc.TransmitDate as date) as TransmitDate, ce.ClaimErrorId, ce.ErrorMessage, 
+cm.CoreModuleName, cet.ErrorTag, cem.ErrorModeName
+  FROM ClaimProcessing.dbo.claim as cpc
+  INNER JOIN ClaimProcessing.dbo.ClaimDoctor as cpcd WITH(INDEX([IX_ClaimDoctor_ClaimId])) ON cpc.Claimid = cpcd.Claimid
+  INNER JOIN InfinediAnalytics.dbo.Active_ClientProvider AS acp WITH(INDEX([IX_ActiveClientProvider_ProviderId_ClientCode])) ON acp.PracticeState in (%s)  and cpc.ClientCode = acp.ClientCode and cpcd.ProviderId = acp.ProviderId
+  INNER JOIN ClaimProcessing.dbo.ClaimError AS ce WITH(INDEX([IX_ClaimError_ClaimId])) ON ce.ClaimId = cpc.claimid
+  INNER JOIN ClaimProcessing.dbo.LookupCoreModules AS cm  ON ce.CoreModuleId = cm.CoreModuleID
+  INNER JOIN ClaimProcessing.dbo.LookupErrortype AS cet WITH(INDEX([IX_ErrorType])) ON cet.ErrorTypeId = ce.ErrorId
+  INNER JOIN ClaimProcessing.dbo.LookupErrorMode as cem  ON cet.ErrorModeId = cem.ErrorModeID
+  WHERE cpc.ClaimTypeId = 1 and cpc.receiveddate >= (%s) and cpc.receiveddate < (%s)  
+  AND cpc.CLaimStatusId != 8100", state_y, prestartdate, enddate), stringsAsFactors = FALSE)
+clm_error$ReceivedDate = as.Date(as.character(clm_error$ReceivedDate), format = "%Y-%m-%d")
+clm_error$TransmitDate = as.Date(as.character(clm_error$TransmitDate), format = "%Y-%m-%d")
+  i = sapply(clm_error, is.factor)
+  clm_error[i] <- lapply(clm_error[i], as.character)
+clm_error$RecMonth = strtrim(months(clm_error$ReceivedDate), 3)
+
+```
+### 1.12 Clean up Error Message and generate Error Reason
+```{r echo = FALSE, include= TRUE}
+err_mess_func <- function(error_tb){
+  #put blank before upper case letter
+     error_tb$ErrorMessage1 = ifelse(error_tb$ErrorTag !='Legacy Error', error_tb$ErrorTag, error_tb$ErrorMessage)
+     #1.delete all inside ><
+     error_tb$ErrorMessage1 = gsub(">[^<]+<", "\\1",error_tb$ErrorMessage1)
+     error_tb$ErrorMessage1 = gsub("><", "\\1",error_tb$ErrorMessage1)
+     #2.delete all inside ()
+     error_tb$ErrorMessage1 = gsub("\\s*\\([^\\)]+\\)", "\\1",error_tb$ErrorMessage1)
+     #3.delete all after Line/Box+ [0-9]
+     error_tb$ErrorMessage1 = gsub("Line: [0-9]+", "\\1",error_tb$ErrorMessage1)
+     error_tb$ErrorMessage1 = gsub("[Ll]ine [0-9]+", "\\1",error_tb$ErrorMessage1)
+     error_tb$ErrorMessage1 = gsub("in [Bb]ox.*|[Bb]ox [0-9]+", "\\1",error_tb$ErrorMessage1)
+#
+     error_tb$ErrorMessage1 = gsub("\\, loop.*", "\\1",error_tb$ErrorMessage1) #comma loop
+     error_tb$ErrorMessage1 = gsub("\\, code.*", "\\1",error_tb$ErrorMessage1) 
+     error_tb$ErrorMessage1 = gsub('[Cc]ode: [0-9]+|[Cc]ode [0-9]+|[Cc]ode:', 'Code', error_tb$ErrorMessage1)
+     error_tb$ErrorMessage1 = gsub('[Cc]ode: [a-zA-Z][0-9]+ |[Cc]ode [a-zA-Z][0-9]+', 'Code', error_tb$ErrorMessage1)
+     error_tb$ErrorMessage1 = gsub("\\Invalid from service date.*", " Invalid 'From' service date",error_tb$ErrorMessage1)
+     error_tb$ErrorMessage1 = gsub("\\Invalid 'to' service date.*", " Invalid 'To' service date",error_tb$ErrorMessage1)
+     error_tb$ErrorMessage1 = gsub("ANSI: .*", "ANSI",error_tb$ErrorMessage1)
+
+     error_tb$ErrorMessage1 = gsub("CPT: .*", "CPT",error_tb$ErrorMessage1 )# CPT:
+     error_tb$ErrorMessage1 = gsub('Diagnosis code [0-9]', 'Diagnosis code', error_tb$ErrorMessage1)
+     error_tb$ErrorMessage1 = gsub("Duplicate Diagnosis.*", "Duplicate Diagnosis",error_tb$ErrorMessage1)
+     error_tb$ErrorMessage1 = gsub("\\-", " ",error_tb$ErrorMessage1) #-
+    error_tb$ErrorMessage1 = gsub('Date: [0-9]+ | Date, [0-9]+ | Date [0-9]+', 'Date ', error_tb$ErrorMessage1)
+    error_tb$ErrorMessage1 = gsub('date: [0-9]+ | date, [0-9]+ | date [0-9]+', 'date', error_tb$ErrorMessage1)
+    error_tb$ErrorMessage1 = gsub('[Dd]ate: [0-9]+', 'date', error_tb$ErrorMessage1)
+    error_tb$ErrorMessage1 = gsub('DOB: [0-9]+|DOB, [0-9]+', 'DOB ', error_tb$ErrorMessage1)
+    #specific replacement
+    error_tb$ErrorMessage1 = gsub('Invalid Claim Filing Indicator.*', 'Invalid Claim Filing Indicator',      error_tb$ErrorMessage1)
+    error_tb$ErrorMessage1 = gsub('External codes cannot be the primary for.*', 'External codes cannot be the primary code',     error_tb$ErrorMessage1)
+    error_tb$ErrorMessage1 = gsub('Cigna Id cannot start with UO.*', 'Cigna Id cannot start with UO', error_tb$ErrorMessage1)
+    error_tb$ErrorMessage1 = gsub("in .* Loop", "", error_tb$ErrorMessage1)
+
+    #remove multiple blanks 
+    error_tb$ErrorMessage1 = gsub(" +", " ",error_tb$ErrorMessage1)
+    
+    colnames(error_tb)[colnames(error_tb) =='ErrorMessage1'] = 'ErrorReason'
+    error_tb = error_tb %>%
+      select(-ErrorMessage)
+     return(error_tb)
+}
+clm_error1 = err_mess_func(clm_error)
+
+devcon = set_connString('SQLDEV2014\\MSSQLDEV2014','InfinediAnalytics')
+push_data(devcon, clm_error1, "dbo.V2ClaimError", append = TRUE, showprogress = TRUE)
+
+```
+```{r echo = FALSE, include= FALSE}
+rm(clm_error, clm_error1)
+gc()
+```
+### 1.13 Get Claims for ERA match
+```{r echo = FALSE, include= TRUE}
+
+#in case there is some problem
+
+change_clmtype_func1 <- function(provider, tb){
+   #first change date to date
+   tb$SrvStartDate = as.Date(as.character(tb$SrvStartDate), format = "%Y-%m-%d")
+   tb$BillingNpi = as.character(tb$BillingNpi)
+   tb$PatAcctNum = as.character(tb$PatAcctNum)
+   tb$TransmitDate = as.Date(as.character(tb$TransmitDate), format = "%Y-%m-%d")
+   #change the rest factor into character
+   i = sapply(tb, is.factor)
+   tb[i] <- lapply(tb[i], as.character)
+   # tb = provider %>% #here to inner join local active provider list because that table in SQL server may not be updated.
+   #   select(ClientCode, ProviderId, Npi) %>%
+   #   inner_join(tb, by = c('ClientCode', 'ProviderId'))
+   return(tb)
+}
+##get last 3 month claims of these clients and providers, for matching
+clm_match = sqlQuery(webanalyticsDEVchannel, sprintf("SELECT distinct cpc.ClientCode, cpc.ProviderId,Npi, PatFirstName, PatLastName, PatAcctNum, TraceNumber, SrvStartDate, ProcCode, BillingNpi, PrimaryDiagCode,TransmitDate, PatientId, concat(cpc.clientCode, PatAcctNum) as Combined
+from InfinediAnalytics.dbo.V1ClaimProcessing as cpc
+inner join InfinediAnalytics.dbo.Active_ClientProvider as acp on cpc.ClientCode = acp.ClientCode and cpc.ProvideriD = ACP.Providerid
+where acp.PracticeState in (%s) and cpc.receiveddate >= (%s) and cpc.receiveddate < (%s)  ", state_y, pre3startdate, enddate), stringsAsFactors = FALSE)
+clm_match = change_clmtype_func1(all_provider, clm_match)
+# where acp.PracticeState = 'OK' AND left(acp.clientcode,1) like %s 
+head(clm_match %>%
+  group_by(ClientCode) %>%
+  dplyr::summarise(cnt = n_distinct(TraceNumber)) %>%
+  arrange(desc(cnt)))
+```
+
+
+## ERA
+### 2.1.1 Getting ERA Claims for Phase I(SQL -> R)
+```{r echo = FALSE, include = TRUE}
+ change_eratype_func <- function(tb){
+   #first change date to date
+   tb$EraMessageDate = as.Date(as.character(tb$EraMessageDate), format = "%Y-%m-%d")
+   tb$PaidDate = as.Date(as.character(tb$PaidDate), format = "%Y-%m-%d")
+   tb$SrvStartDate = as.Date(as.character(tb$SrvStartDate), format = "%Y-%m-%d")
+   tb$SrvEndDate = as.Date(as.character(tb$SrvEndDate), format = "%Y-%m-%d")
+   tb$RenProvId = as.character(tb$RenProvId)
+   tb$POS = substr(as.character(tb$POS), 1,2)
+   tb$PayerID = as.character(tb$PayerID)
+   tb$ProcCode = as.character(tb$ProcCode)
+   tb$PatAcctNum = as.character(tb$PatAcctNum)
+   #change the rest factor into character
+   i = sapply(tb, is.factor)
+   tb[i] <- lapply(tb[i], as.character)
+   return(tb)
+ }
+s= Sys.time()
+# for Phase1, there is no need to include Adjustment, so DROP claimAdj, SrvAdj, no need to push to EraBase_LOAD
+#AND acp.PracticeState = 'OK' AND left(acp.clientcode,1) like %s
+new_era = sqlQuery(erachannel, sprintf("with result as (
+   SELECT DISTINCT acp.PracticeState, ee.CliCode AS CliCode, CONCAT(CliCode,'', PatAcctNum) as Combined,CAST(ee.MessageTime AS DATE) AS EraMessageDate, CAST(et.CheckEFTDate AS DATE) AS PaidDate, ec.Claimid AS EraClaimId, ec.TraceNumber,
+    ec.ClaimStatus AS EraClaimStatus,pr.PayerID, CONCAT(pr.PayerSt,' ', pr.PayerName) AS StPayerName,  upper(ec.PatLastName) as PatLastName, upper(ec.PatFirstName) as PatFirstName, ec.PatAcctNum, ec.PatInsID,ec.ICN, 
+   es.SrvLineId AS EraSrvLineId, es.RenProvId, es.SrvStartDate, es.SrvEndDate, es.POS, es.ProcCode, es.Mod1, es.Mod2,es.Mod3,
+   es.Billed AS srv_Billed, es.Allowed AS srv_Allowed, es.Deduct AS srv_Deduct, es.COINS AS srv_COINS, es.ProvPaid AS srv_ProvPaid, es.QtyPaid AS srv_QtyPaid, 
+   es.Reduced AS srv_Reduced
+   FROM [ERA].[dbo].[tblQEra] AS ee
+   INNER JOIN [InfinediAnalytics].[dbo].[Active_ClientProvider] AS acp WITH(INDEX(IX_ActiveClientProvider_ClientCode)) ON ee.CliCode = acp.ClientCode
+   INNER JOIN [ERA].[dbo].[tblQEraTrans] AS et ON ee.EraId = et.EraId
+   INNER JOIN  [ERA].[dbo].[tblQEraClaims] AS ec WITH(INDEX(IDX_TransIdClaimStatus)) ON ec.TransId = et.TransId
+   INNER JOIN [ERA].[dbo].[tblQEraPayer] AS pr ON et.PayerRef = pr.PayerRef
+   INNER JOIN [ERA].[dbo].[tblQEraSrvLines] AS es ON ec.ClaimId = es.ClaimId
+   WHERE ee.Status !=4 --AND ec.ClaimStatus !=4  --not Rejected nor Duplicate
+   AND ee.MessageTime >= (%s) and ee.MessageTime < (%s) 
+AND acp.PracticeState in (%s)
+
+ ), 
+ clicodeIdentifier as
+ (SELECT distinct CONCAT(cpc.ClientCode, '', cpci.IdentifierValue) as ClientCode_IdentifierValue--, TraceNumber 
+ FROM ClaimProcessing.dbo.Claim AS cpc 
+ INNER JOIN ClaimProcessing.dbo.ClaimIdentifier as cpci with(index(IX_ClaimIdentifer_ClaimId_identifierType)) on cpc.claimid = cpci.claimid
+ INNER JOIN ClaimProcessing.dbo.ClaimDoctor AS cpcd WITH(INDEX(IX_ClaimDoctor_ClaimId)) ON cpc.ClaimId = cpcd.ClaimId
+ INNER JOIN InfinediAnalytics.dbo.Active_ClientProvider AS acp WITH(INDEX(IX_ActiveClientProvider_ProviderId_ClientCode)) ON cpcd.ProviderId = acp.ProviderID AND cpc.ClientCode = acp.ClientCode
+ where cpc.claimtypeid = 1 AND cpc.ClaimStatusId = 8100 and cpc.receiveddate >= (%s) AND cpc.receiveddate < (%s) 
+AND acp.PracticeState in (%s)
+
+ ),
+ distinctTracenumber as
+ (select distinct cpc.TraceNumber FROM ClaimProcessing.dbo.claim as cpc
+  INNER JOIN ClaimProcessing.dbo.ClaimDoctor AS cpcd WITH(INDEX(IX_ClaimDoctor_ClaimId)) ON cpc.ClaimId = cpcd.ClaimId
+  INNER JOIN InfinediAnalytics.dbo.Active_ClientProvider AS acp WITH(INDEX(IX_ActiveClientProvider_ProviderId_ClientCode)) ON cpcd.ProviderId = acp.ProviderID AND cpc.ClientCode = acp.ClientCode
+  where cpc.claimtypeid = 1 AND cpc.ClaimStatusId = 8100 and cpc.receiveddate >= (%s) AND cpc.receiveddate < (%s)
+AND acp.PracticeState in (%s)
+
+ ), endResult as
+ (
+ select * from result where result.Combined in (select clicodeIdentifier.ClientCode_IdentifierValue from clicodeIdentifier) 
+ union
+ select * from result where  result.TraceNumber in (select distinctTracenumber.Tracenumber from distinctTracenumber)
+ )
+ select distinct * from endResult", prestartdate, enddate, state_y, pre3startdate, enddate,state_y, pre3startdate, enddate, state_y), stringsAsFactors = FALSE)
+e= Sys.time()
+new_era = change_eratype_func(new_era)
+e-s
+```
+### 2.1.2 get era claim adj and srv adj for Phase II
+```{r  echo = FALSE, include = TRUE}
+change_eraadj_type <- function(tb){
+ tb$SrvGroupCode = as.character(tb$SrvGroupCode)
+ tb$SrvReasonCode = as.character(tb$SrvReasonCode)
+ return(tb)
+}
+eraadj = sqlQuery(erachannel, sprintf("SELECT DISTINCT ec.ClaimId as EraClaimId,
+   es.SrvLineId AS EraSrvLineId,
+   esa.GroupCode as SrvGroupCode, esa.ReasonCode as SrvReasonCode, esa.Amount as SrvAdjAmount
+   FROM [ERA].[dbo].[tblQEra] AS ee
+   INNER JOIN [InfinediAnalytics].[dbo].[Active_ClientProvider] AS acp WITH(INDEX(IX_ActiveClientProvider_ClientCode)) ON ee.CliCode = acp.ClientCode
+   INNER JOIN [ERA].[dbo].[tblQEraTrans] AS et ON ee.EraId = et.EraId
+   INNER JOIN  [ERA].[dbo].[tblQEraClaims] AS ec WITH(INDEX(IDX_TransIdClaimStatus)) ON ec.TransId = et.TransId
+   INNER JOIN [ERA].[dbo].[tblQEraPayer] AS pr ON et.PayerRef = pr.PayerRef
+   INNER JOIN [ERA].[dbo].[tblQEraSrvLines] AS es ON ec.ClaimId = es.ClaimId
+   left join [ERA].[dbo].[tblQEraSrvLineAdj] as esa with(index(IDX_TransIdGroupCodeReasonCodeAmountQuantity)) on es.SrvLineId = esa.SrvLineId 
+   WHERE ee.Status !=4 --AND ec.ClaimStatus !=4  --not Rejected nor Duplicate
+   AND ee.MessageTime >= (%s) and ee.MessageTime < (%s) AND acp.PracticeState in (%s)
+ ", prestartdate, enddate, state_y), stringsAsFactors = FALSE)
+eraadj = change_eraadj_type(eraadj)
+#AND acp.PracticeState = 'OK' AND left(acp.clientcode,1) like %s
+```
+### 2.2 era_function1 -- match ProviderId
+```{r  echo = FALSE, include = TRUE}
+ era_step1_func <- function(era, clm_final){
+   #1.change date type
+   era = change_eratype_func(era)
+   j = sapply(era, is.character)
+   era[j] = lapply(era[j], trimws, which = 'both')
+   #clm_final = change_clmtype_func1(all_provider,clm_final)
+   print(paste('original EraClaimId:',length(unique(era$EraClaimId))))
+   #2.drop unmatched Npi
+   era = era %>%
+     filter(RenProvId %in% clm_final$Npi | RenProvId %in% clm_final$BillingNpi|TraceNumber %in% clm_final$TraceNumber |Combined %in% clm_final$Combined)
+   print(paste('After drop unmatched NPI:',length(unique(era$EraClaimId))))
+   #3.munally fill LegacyProviderId
+   era$ProviderId = rep(NA, nrow(era))
+ #1. try to fill Missing ProviderId with TraceNumber
+ era$ProviderId[is.na(era$ProviderId)] <- clm_final$ProviderId[match(era$TraceNumber[is.na(era$ProviderId)], clm_final$TraceNumber)]
+ print(paste('FILL1 EraClaimId', length(unique(era$EraClaimId[is.na(era$ProviderId)]))))
+ #3.try to fill Missing with NPI
+ era$ProviderId[is.na(era$ProviderId)] <- clm_final$ProviderId[match(era$RenProvId[is.na(era$ProviderId)], clm_final$Npi)] 
+ print(paste('FILL2 EraClaimId', length(unique(era$EraClaimId[is.na(era$ProviderId)]))))
+ #4.try to fill Missing with BillingNpi
+ era$ProviderId[is.na(era$ProviderId)] <- clm_final$ProviderId[match(interaction(era$RenProvId[is.na(era$ProviderId)],era$SrvStartDate[is.na(era$ProviderId)],era$ProcCode[is.na(era$ProviderId)]), interaction(clm_final$BillingNpi, clm_final$SrvStartDate, clm_final$ProcCode))] #214 ->1, 267 -> 1
+ length(unique(era$EraClaimId[is.na(era$ProviderId)]))
+ print(paste('FILL3 EraClaimId', length(unique(era$EraClaimId[is.na(era$ProviderId)]))))
+ #2. try to fill Missing with CliPatAcct(Accuracy is not low)
+ era$ProviderId[is.na(era$ProviderId)] <- clm_final$ProviderId[match(interaction(era$Combined[is.na(era$ProviderId)],era$ProcCode[is.na(era$ProviderId)]), interaction(clm_final$CliPatAcct,clm_final$ProcCode) )] #2841 -> 214; 1049-> 267
+ print(paste('FILL4 EraClaimId', length(unique(era$EraClaimId[is.na(era$ProviderId)]))))
+ 
+ #DROP the rest LegacyProviderId
+   era1 = era %>%
+     filter(!is.na(ProviderId))
+   #print(head(era[is.na(era$ProviderId), ]))
+   print(paste('After filling ProviderId:',length(unique(era1$EraClaimId))))
+   return(era1)
+ }
+# era_1 = era_step1_func(new_era, clm_match)
+
+```
+
+### 2.2 era_function2--match ERA with Claim by clmkey1&2
+```{r echo = FALSE, include = TRUE}
+era_step12_func <- function(tb1, clm_tb){
+  #4.match with clmkey
+   attributes(clm_tb)$vars = NULL
+   #there are stupid case when there is comma in PatAcctNum but in Era they drop it. So I assume there shouldn't be comma of PatAcctNum
+   clm_tb$PatAcctNum = gsub(",", "", clm_tb$PatAcctNum)
+   #for phase 1 no need to include primarydiagcode, but for phase2, need.
+   clmkey1 = unique(clm_tb %>%
+                   select(ClientCode, ProviderId, TraceNumber, PatientId, SrvStartDate, ProcCode, PrimaryDiagCode, TransmitDate))
+   #print(clmkey1)
+   clmkey2 = unique(clm_tb %>%
+                   mutate(pfi = strtrim(PatFirstName,1), 
+                          pli = strtrim(PatLastName, 1)) %>%
+                   select(ClientCode, ProviderId, PatAcctNum, pli, pfi, PatientId, SrvStartDate, PrimaryDiagCode, TransmitDate))
+   #print(clmkey2)
+   era2 = tb1 %>%
+   left_join(clmkey1, by = c('CliCode' = 'ClientCode','ProviderId' = 'ProviderId', 'TraceNumber' = 'TraceNumber', 'SrvStartDate' = 'SrvStartDate', 'ProcCode' = 'ProcCode'))
+   #print(era2)
+   era_load = era2 %>%
+   filter(is.na(PatientId)) %>%
+   mutate(pfi = strtrim(PatFirstName,1),
+          pli = strtrim(PatLastName, 1)) %>%
+   select(-c(PatientId, PrimaryDiagCode, TransmitDate)) %>%
+   inner_join(clmkey2, by = c('CliCode' = 'ClientCode','ProviderId' = 'ProviderId', 'PatAcctNum' = 'PatAcctNum', 'pfi' = 'pfi','pli' = 'pli', 'SrvStartDate' = 'SrvStartDate')) %>%
+   select(-c(pfi, pli))%>%
+   rbind(era2 %>%filter(!is.na(PatientId))) %>%
+     filter(PaidDate > TransmitDate) #added in 03/26
+   print(paste('After Join with clm:',length(unique(era_load$EraClaimId))))
+   return(era_load)
+   ########################## that's done for ERABase_LOAD ################
+}
+
+```
+
+```{r  echo = FALSE, include = TRUE}
+#grab needed varaibles from era_feb_2 push to V2ERA_LOAD
+era_step2_func <- function(era_step1_result){
+  v2era_load = era_step1_result %>%
+    select(CliCode, ProviderId,PayerID, StPayerName, TransmitDate, EraMessageDate, PaidDate, EraClaimId, EraSrvLineId) %>%
+    distinct()
+  devcon = set_connString('SQLDEV2014\\MSSQLDEV2014','InfinediAnalytics')
+  push_data(devcon, v2era_load, "dbo.V2Era_LOAD", append = TRUE, showprogress = TRUE)
+  return( v2era_load)
+}
+
+#test
+# era_step2_func(era_2) 
+```
+
+
+### 2.3 era_function3--deal with 22-ERA
+```{r echo = FALSE, include = TRUE}
+drop_22_func = function(tb){
+  tb$ProcedureId = gsub('\\s+', '', apply(tb[, c('CliCode','ProviderId', 'PatientId','SrvStartDate', 'ProcCode', 'Mod1')],1, paste0, collapse = '_'))
+  tb22 = unique(tb[tb$EraClaimStatus == 22,c('CliCode', 'ProviderId','PayerID', 'EraSrvLineId','EraClaimId','EraClaimStatus', 'PatInsID','PatAcctNum', 'SrvStartDate','ProcedureId', 'srv_Billed', 'srv_Allowed', 'srv_ProvPaid','srv_QtyPaid')]) %>%
+  group_by(ProcedureId) %>%
+  mutate(cnt = n())
+
+  origin_tb = sqldf("select T1.PatAcctNum, t1.PayerID, t1.EraSrvLineId, t1.PatientId, t1.PatInsID,t1.ProcedureId, t1.srv_Billed, t1.srv_Allowed, t1.srv_Provpaid from tb as t1
+      join tb22 as t2
+on t1.ProcedureId = t2.ProcedureId
+      where t2.PayerID = t1.PayerID and t2.PatAcctNum = t1.PatAcctNum AND t2.Srv_Billed = - t1.Srv_Billed AND t1.srv_ProvPaid = - t2.srv_ProvPaid AND t1.EraClaimStatus !=22 AND t1.Srv_Billed > 0 
+GROUP BY t1.EraSrvLineId, t1.PatientId, t1.PatInsID, t1.ProcedureId,  t1.srv_Billed, t1.srv_Allowed, t1.srv_Provpaid",drv = 'SQLite')
+
+  origin_id = unique(
+              inner_join(origin_tb, tb22[, c('ProcedureId', 'cnt')], by = 'ProcedureId') %>%
+               group_by(ProcedureId) %>%
+               arrange(ProcedureId, EraSrvLineId)) %>%
+               dplyr::slice(1:cnt[1])
+  
+  delete_id = c(origin_id$EraSrvLineId, tb22$EraSrvLineId)
+
+  new_tb = unique(tb %>%
+            filter(!EraSrvLineId %in% delete_id)) %>%
+    filter(EraClaimStatus !=4)
+  return(new_tb)
+}
+#drop_22_func(era_2)
+
+```
+### 2.4 ERA_function 3 -- push to sql server for Phase I & Phase II
+```{r echo = FALSE, include = TRUE}
+era_step3_func<- function(era_2, eraadj){
+  era_3 = drop_22_func(era_2)
+  era_3$EraMonth = strtrim(months(era_3$EraMessageDate),3)
+  era_3$PayerID = as.character(era_3$PayerID)
+  
+  #for Phase 1 uploading
+  V1erabase = era_3 %>%
+    select( c("CliCode","EraMessageDate","PaidDate" , "EraClaimId","TraceNumber","EraClaimStatus", "PayerID","StPayerName", "PatAcctNum","PatInsID","ICN","EraSrvLineId","RenProvId","SrvStartDate","SrvEndDate", "POS","ProcCode","Mod1", "Mod2","srv_Billed","srv_Allowed","srv_Deduct","srv_COINS","srv_ProvPaid","srv_Reduced","EraMonth", "ProcedureId","ProviderId", "PatientId")) %>%
+    distinct()
+  V1erabase$PatAcctNum = as.character(V1erabase$PatAcctNum)
+  V1erabase$RenProvId = as.character(V1erabase$RenProvId)
+  V1erabase$POS = as.character(V1erabase$POS)
+  devcon = set_connString('SQLDEV2014\\MSSQLDEV2014','InfinediAnalytics')
+  push_data(devcon, V1erabase, "dbo.V1EraBase", append = TRUE, showprogress = TRUE)
+  #print(V1erabase)
+  # for pahse 2 uploading
+  V2erabase = era_3 %>%
+    inner_join(eraadj, by = c('EraClaimId', 'EraSrvLineId')) %>%
+    select(CliCode, ProviderId, PatientId,ProcedureId, EraMessageDate, PaidDate, EraClaimId, EraClaimStatus, PayerID, StPayerName, EraSrvLineId,ProcCode, Mod1, srv_Billed, srv_Allowed, srv_Deduct, srv_COINS, srv_ProvPaid, srv_Reduced, SrvGroupCode, SrvReasonCode, SrvAdjAmount, PrimaryDiagCode, TransmitDate) %>%
+    distinct()
+  devcon = set_connString('SQLDEV2014\\MSSQLDEV2014','InfinediAnalytics')
+  push_data(devcon, V2erabase, "dbo.V2EraBase", append = TRUE, showprogress = TRUE)
+  #print(V2erabase)
+  return(era_3)
+}
+#era_step3_func(era_2, eraadj)
+```
+
+### 2.5 overall_function
+```{r echo = FALSE, include = TRUE}
+era_tot_func <- function(era, clm_final, eraadj){
+  era_1 = era_step1_func(era, clm_final) #1.get ProviderID
+  
+  era_2 = era_step12_func(era_1, clm_final) #2.match claims with keys
+  attributes(era_2)$vars <- NULL
+  
+  era_step2_func(era_2) #3.Push to V2Erabase_LOAD
+  
+  era_step3_func(era_2, eraadj) #4.drop 22, then push to Phase 1, phase2 EraBase table
+  return(head(era_2))
+
+}
+s= Sys.time()
+era_tot_func(new_era, clm_match, eraadj)
+e= Sys.time()
+print(paste('Time for ERA steps is:', e-s))
+memory.size()
+
+```
+So far, the phase 1, phase 2 is done.
+
+
+```{r echo = FALSE, include = TRUE}
+rm(new_era, clm_match, eraadj)
+gc()
+memory.size()
+EE = Sys.time()
+print(paste('Total Executing Time is: ', EE-SS))
+# odbcClose(clmprochannel)
+# odbcClose(erachannel)
+# odbcClose(webanalyticschannel)
+```
+
+
+
