@@ -1,0 +1,142 @@
+---
+title: "Traction"
+author: "TF"
+date: "12/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+.rs.restartR()
+gc()
+memory.size()
+```
+
+```{r}
+setwd("C:\\Users\\tianyi.fang\\Documents\\Projects_Infinedi")
+library('RODBC')
+library('sqldf')
+library('dplyr')
+library('rlang')
+#library('tibble')
+library('RSQLS')
+# library(DBI)
+# library(RMySQL)
+library(stringr)
+#library(tidyverse)
+library(data.table)
+```
+Since the raw file is too large, using read_table in *readr*
+```{r}
+traceinsert = fread('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\Tracetion\\TraceInsertDate.txt')
+#colnames(traceinsert)  = c('TraceNumber', 'InsertDate', 'LastInsertDate')
+
+```
+```{r}
+test = traceinsert[1:10,] %>%as.data.frame()
+options(scipen=999)
+test %>%
+  mutate(insertdate1 = as.POSIXct(InsertDate, format ='%Y-%m-%d %H:%M:%OS' ),
+         PreviousInsertDate1 =as.POSIXct(PreviousInsertDate, format ='%Y-%m-%d %H:%M:%OS' )) %>%
+  mutate(delta = difftime(insertdate1, PreviousInsertDate1)) %>%
+  as.data.frame()
+# test
+
+```
+```{r}
+options(scipen=999) 
+
+#traceinsert$InsertDate1 = strptime(traceinsert$InsertDate, format ='%Y-%m-%d %H:%M:%OS' )
+#traceinsert$PreviousInsertDate1 = strptime(traceinsert$PreviousInsertDate, format ='%Y-%m-%d %H:%M:%OS' )
+traceinsert = traceinsert %>%
+  mutate(InsertDate1 = as.POSIXct(InsertDate, format ='%Y-%m-%d %H:%M:%OS' ),
+         PreviousInsertDate1 =as.POSIXct(PreviousInsertDate, format ='%Y-%m-%d %H:%M:%OS' )) %>%
+  mutate(delta =  difftime(InsertDate1, PreviousInsertDate1))%>%
+  mutate(range = ifelse(delta ==0,0,
+                        ifelse(delta <=1, 1, 
+                               ifelse(delta <= 2, 2,
+                                      ifelse(delta <= 3, 3,
+                                             ifelse(delta <= 4, 4,
+                                                    ifelse(delta <= 5, 5,
+                                                           ifelse(delta <= 6, 6,
+                                                                  ifelse(delta <= 7, 7,
+                                                                         ifelse(delta <= 8, 8,
+                                                                                ifelse(delta <= 9, 9,
+                                                                                       ifelse(delta <= 10, 10,
+                                                                                              ifelse(delta <= 20, 20,
+                                                                                                     ifelse(delta <= 50, 50,
+                                                                                                            ifelse(delta <= 100, 100,999))))))))))))))) %>%
+  select(-c(InsertDate, PreviousInsertDate)) %>%
+  as.data.frame()
+```
+
+```{r}
+traceinsert %>%
+  mutate(range = ifelse(delta ==0,0,
+                        ifelse(delta <=1, 1, 
+                               ifelse(delta <= 2, 2,
+                                      ifelse(delta <= 3, 3,
+                                             ifelse(delta <= 4, 4,
+                                                    ifelse(delta <= 5, 5,
+                                                           ifelse(delta <= 6, 6,
+                                                                  ifelse(delta <= 7, 7,
+                                                                         ifelse(delta <= 8, 8,
+                                                                                ifelse(delta <= 9, 9,
+                                                                                       ifelse(delta <= 10, 10,
+                                                                                              ifelse(delta <= 20, 20,
+                                                                                                     ifelse(delta <= 50, 50,
+                                                                                                            ifelse(delta <= 100, 100,999))))))))))))))) %>%
+  group_by(range) %>%
+  summarise(cnt = n()) %>%
+  mutate(pct = round(cnt/11947838*100,3)) %>%
+  arrange(range)
+```
+```{r}
+mean(traceinsert$delta[2:nrow(traceinsert)])
+max(traceinsert$delta[2:nrow(traceinsert)])
+min(traceinsert$delta[2:nrow(traceinsert)])
+```
+```{r}
+erachannel = odbcConnect('ERAdatabase')
+clmprochannel = odbcConnect('ClaimProcessing_Database')
+```
+
+
+The sqlQuery automatically display date as POSIXct format(without millisecond), but no need to worry when do difftime, the delta is still there. 
+```{r}
+#get claimid 
+test_list = sqlQuery(clmprochannel,"select TraceNumber, Claimid, ReceivedDate, TransmitDate,InsertUserid, InsertDate, UpdateUserID, UpdateDate from [ClaimProcessing].dbo.claim
+where claimtypeid =1 and receiveddate>='2019-11-01' and receiveddate <='2019-11-03'", stringsAsFactors = FALSE)
+
+clmid = paste(test_list$Claimid, collapse = ',')
+#noquote(clmid)
+
+
+```
+
+```{r}
+clmamount = sqlQuery(clmprochannel, "  select Claimid, ClaimServiceLineId, AmountValue, InsertUserId, InsertDate, UpdateUserId, UpdateDate from claimprocessing.dbo.ClaimAmount
+  where insertdate >='2019-11-01' and insertdate <='2019-11-03' ",stringsAsFactors = FALSE )
+
+clmattach = sqlQuery(clmprochannel, "select Claimid,ClaimAttachmentId, InsertUserId, InsertDate, UpdateUserId, UpdateDate from [ClaimProcessing].[dbo].[ClaimAttachment]
+  where insertdate >='2019-11-01' and insertdate <='2019-11-03'",stringsAsFactors = FALSE )
+
+clmcert = sqlQuery(clmprochannel, "  select Claimid,ClaimCertId, InsertUserId, InsertDate, UpdateUserId, UpdateDate from [ClaimProcessing].[dbo].[ClaimCertification]
+  where insertdate >='2019-11-01' and insertdate <='2019-11-03'",stringsAsFactors = FALSE )
+
+clmdiag = sqlQuery(clmprochannel, "SELECT distinct ClaimId,  InsertDate,InsertUserId,[UpdateUserId],[UpdateDate]
+from [ClaimProcessing].[dbo].[ClaimDiagnosisCode] where insertdate >='2019-11-01' and insertdate <='2019-11-03' ",stringsAsFactors = FALSE)
+
+clmdoc = sqlQuery(clmprochannel, "SELECT distinct ClaimId, ClaimDoctorID, InsertDate, InsertUserId,[UpdateUserId],[UpdateDate] from [ClaimProcessing].[dbo].[ClaimDoctor] 
+where insertdate >='2019-11-01' and insertdate <='2019-11-03'",stringsAsFactors = FALSE)
+
+clmdrog = sqlQuery(clmprochannel, "SELECT distinct ClaimId,ClaimServiceLineID, ClaimDrugInfoId, InsertDate, InsertUserId,[UpdateUserId],[UpdateDate] from [ClaimProcessing].[dbo].[ClaimDrugInfo] 
+where insertdate >='2019-11-01' and insertdate <='2019-11-03'",stringsAsFactors = FALSE)
+
+clmerror = sqlQuery(clmprochannel, "  SELECT distinct ClaimId,ClaimErrorId, InsertDate, InsertUserId,[UpdateUserId],[UpdateDate] from [ClaimProcessing].[dbo].[ClaimError] 
+where insertdate >='2019-11-01' and insertdate <='2019-11-03'",stringsAsFactors = FALSE )
+```

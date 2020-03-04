@@ -1,0 +1,1281 @@
+---
+title: "HighCostPatient"
+author: "TF"
+date: "June 11, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999)
+```
+
+```{r echo = FALSE}
+##this file's functions are all final ones, the test and detailed ones are in all_sample1.rmd
+rm(list = ls())
+.rs.restartR()
+gc()
+memory.size()
+```
+
+```{r}
+setwd("C:/Users/tianyi.fang/Desktop/TF/projects/ACO/HighCostPatient")
+library('RODBC')
+library('sqldf')
+library('dplyr')
+library('rlang')
+library('tibble')
+library('RSQLS')
+library(tidyr)
+library(data.table)
+
+qvhchannel = odbcConnect('QVHdatabase')
+```
+
+1. read in all necessary tables --- Update in 08/21/2019
+```{r}
+#table1_4 is not include 2018_final
+table1_4 = read.csv("C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\TF\\finaltable1_4_0719.csv", header = TRUE, stringsAsFactors = FALSE)
+#table1_4_v2 include 2018_final
+table1_4_v2 = read.csv("C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\TF\\table1_4_0821.csv", header = TRUE, stringsAsFactors = FALSE)
+optout = read.csv("C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\TF\\alex\\optout.csv", header = TRUE, stringsAsFactors = FALSE)
+ICD_chronic = read.csv("C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ProcessingCode\\cci_icd10cm_2019_1.csv", header = TRUE, stringsAsFactor = FALSE)
+betoscode = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ProcessingCode\\betos_full.csv', header = TRUE, colClasses = 'character', stringsAsFactors = FALSE)
+cms_stands = read.csv("C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\TF\\cms_standard.csv", header = TRUE, stringsAsFactors = FALSE)
+```
+split each column into a vector to insert to sql query
+```{r}
+#since we need patient assigned in both 2017_final and 2018_q4. in Table1_4, find patients who are in both years.
+patient1718 = table1_4 %>%
+  filter(Reportdate %in% c('2017_final', '2018_q4'))%>%
+  group_by(PatientId) %>%
+  mutate(cnt = n()) %>%
+  filter(cnt==2)%>%
+  select(PatientId, HICN, PCPTin, PCPNPI, Year)%>%
+  distinct() %>%
+  as.data.frame()
+
+optout2017 = optout %>%
+  filter(year ==2017)%>%
+  select(PatientId, HICN,month)
+optout2018 = optout %>%
+  filter(year ==2018)%>%
+  select(PatientId, HICN,month)
+ 
+final17_pat = read.csv("C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\final17_pat.csv", header = TRUE, stringsAsFactors =  FALSE) 
+q42018_pat = read.csv("C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\q42018_pat.csv", header = TRUE, stringsAsFactors =  FALSE) 
+
+```
+table1_4_full method <- do not delete
+```{r}
+table1_4_update = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\TF\\alex\\table1_4_full - updated.csv', header = TRUE, stringsAsFactors =FALSE)
+hicdic = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\TF\\alex\\hicdictionary_2.csv', header = TRUE, stringsAsFactors =FALSE)
+#step1. each beneficiary be assigned to the latest PCP in each year
+table1_4_v2 = table1_4_update %>%
+  inner_join(hicdic, by = c('HICN'= 'BENE_HIC_NUM'))  %>%
+  filter(Year >=2017) %>%
+  group_by(patientid, Year) %>%
+  filter(reportrank == max(reportrank) & providerrank == min(providerrank)) %>%
+  select(patientid, Year, Sub, HICN, Tin, NPI, Reportdate) %>%
+  rename(PatientId = patientid, PCPTin = Tin, PCPNPI = NPI) %>%
+  arrange(PatientId, Year) %>%
+  as.data.frame()
+write.csv(table1_4_v2,"C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\TF\\table1_4_0821.csv" , row.names = FALSE)
+```
+
+```{r}
+patient1718_v2 = table1_4_v2 %>%
+  filter(Reportdate %in% c('2017_final', '2018_final'))%>%
+  group_by(PatientId) %>%
+  mutate(cnt = n()) %>%
+  filter(cnt==2)%>%
+  select(PatientId, HICN, PCPTin, PCPNPI, Year)%>%
+  distinct() %>%
+  as.data.frame()
+length(unique(patient1718_v2$PatientId)) #5264 patients have both 2017 and 2018
+```
+update 08/14/2019, save all final2017_pat/q42018 (raf + demo) to csv
+```{r}
+#get quarterly report 2017_finaL, filter dead people
+final17 =  sqlQuery(qvhchannel, "SELECT [HICN]
+      ,concat( upper([FirstName]) ,' ' , upper(lastname)) as PatientName
+      ,case when [SEX] = 1 then 'Male' WHEN [Sex] =2 then 'Female' ELSE  'Unknown' end as Sex
+      ,CountyName,StateName
+      ,cast(LEFT(ReportDate, 4) as int) - left([BirthDate], 4) as Age
+      ,[AssignmentStepFlag]
+      ,[MonthlyEligibilityFlag1]
+      ,[MonthlyEligibilityFlag2]
+      ,[MonthlyEligibilityFlag3]
+      ,[MonthlyEligibilityFlag4]
+      ,[MonthlyEligibilityFlag5]
+      ,[MonthlyEligibilityFlag6]
+      ,[MonthlyEligibilityFlag7]
+      ,[MonthlyEligibilityFlag8]
+      ,[MonthlyEligibilityFlag9]
+      ,[MonthlyEligibilityFlag10]
+      ,[MonthlyEligibilityFlag11]
+      ,[MonthlyEligibilityFlag12]
+      ,[MonthlyCMSHCCRiskScore1]
+      ,[MonthlyCMSHCCRiskScore2]
+      ,[MonthlyCMSHCCRiskScore3]
+      ,[MonthlyCMSHCCRiskScore4]
+      ,[MonthlyCMSHCCRiskScore5]
+      ,[MonthlyCMSHCCRiskScore6]
+      ,[MonthlyCMSHCCRiskScore7]
+      ,[MonthlyCMSHCCRiskScore8]
+      ,[MonthlyCMSHCCRiskScore9]
+      ,[MonthlyCMSHCCRiskScore10]
+      ,[MonthlyCMSHCCRiskScore11]
+      ,[MonthlyCMSHCCRiskScore12]
+      ,[DemographicRiskScoreforESRDStatus]
+      ,[DemographicRiskScoreforDisabledStatus]
+      ,[DemographicRiskScoreforAgedDualStatus]
+      ,[DemographicRiskScoreforAgedNonDualStatus]
+  FROM [QVHSACODataLoad].[dbo].[table1_1_full]
+  where reportdate = '2017_final'", stringsAsFactors = FALSE)
+# remove all leading/tailing whitespace
+
+j = sapply(final17, is.character) 
+final17[j] <- lapply(final17[j], trimws, which = 'both')
+
+```
+2017 RAF(monthly)
+```{r}
+#match with only Assigned patients
+final17 = patient1718 %>%
+  select(HICN, PatientId) %>%
+  distinct() %>%
+  inner_join(final17, by = 'HICN')
+#turn monthly into a category and get the monthly HCC RAF score
+
+final17_mr = final17 %>%
+  select(-c(PatientName,Sex,CountyName, StateName, AssignmentStepFlag)) %>%
+  gather(key = 'Month', value = 'MonthlyStatusFlag', MonthlyEligibilityFlag1:MonthlyEligibilityFlag12 ) %>%
+  mutate(Month = as.numeric(gsub('[^0-9]', '',Month))) %>%
+  select(c(HICN, PatientId, Month, MonthlyStatusFlag)) %>%
+  inner_join(
+    final17 %>%
+      select(-c(PatientName,Sex, CountyName, StateName, AssignmentStepFlag)) %>%
+      gather(key = 'Month', value = 'MonthlyRafScore', MonthlyCMSHCCRiskScore1: MonthlyCMSHCCRiskScore12) %>%
+      mutate(Month = as.numeric(gsub('[^0-9]', '',Month))) %>%
+      select(c(HICN, PatientId, Month, MonthlyRafScore))
+    , by = c('HICN', 'PatientId', 'Month')) %>%
+  mutate(MonthlyStatusName = ifelse(MonthlyStatusFlag == 1,'ESRD',
+                                    ifelse(MonthlyStatusFlag == 2,'Disabled',
+                                           ifelse(MonthlyStatusFlag == 3, 'AgedDual', 
+                                                  ifelse(MonthlyStatusFlag ==4, 'AgedNonDual', 'Dead'))))) %>%
+  select(HICN, PatientId, Month, MonthlyStatusName, MonthlyStatusFlag, MonthlyRafScore) %>%
+  arrange(PatientId, HICN, Month)
+final17_mr$Year = 2017
+
+#get the demo RAF score. Notice if one patient is in 2 category, then the Demo Raf will also be in these 2 categories.
+final17_dr = final17 %>%
+  select(HICN, PatientId, DemographicRiskScoreforESRDStatus, DemographicRiskScoreforDisabledStatus, DemographicRiskScoreforAgedDualStatus, DemographicRiskScoreforAgedNonDualStatus) %>%
+  gather(key = 'MonthlyStatusName', value = 'DemoRafScore', DemographicRiskScoreforESRDStatus:DemographicRiskScoreforAgedNonDualStatus ) %>%
+  mutate(MonthlyStatusName = gsub('.*for', '', MonthlyStatusName)) %>%
+  mutate(MonthlyStatusName = gsub('Status.*', '', MonthlyStatusName)) %>%
+  filter(!is.na(DemoRafScore))%>%
+  arrange(PatientId, HICN,MonthlyStatusName)
+
+#combine the monthly RAF and Demo RAF
+final17_raf = final17_mr %>%
+  inner_join(final17_dr, by = c('PatientId', 'MonthlyStatusName')) %>%
+  select(PatientId,Year, Month, MonthlyStatusName,MonthlyStatusFlag, MonthlyRafScore, DemoRafScore) %>%
+  distinct() %>%
+  arrange(PatientId)
+
+#drop optout patients-- since final17_raf get all raf for each patient in each month, we can inner join with optout table to drop these patients in certain month.
+final17_raf1 = final17_raf %>%
+  left_join(optout2017, by = c('PatientId'='PatientId','Month' = 'month'))%>%
+  filter(is.na(HICN))%>% # if the HICN is not null, then means in that month, this HICN is optout.
+  select(-HICN)
+```
+2017 RAF yearly
+```{r}
+
+ #calculate the anually RAF score  = sum(PRj*RAFj)/sum(PRj)) for each PatientId
+final17_raf2_agg = final17_raf1%>% 
+  group_by(PatientId, MonthlyStatusName) %>% #do de-renormalize
+  mutate(MonthlyHCCRaf = ifelse(MonthlyStatusFlag ==1, MonthlyRafScore*1.114,
+                       ifelse(MonthlyStatusFlag ==2, MonthlyRafScore*1.287,
+                              ifelse(MonthlyStatusFlag ==3, MonthlyRafScore*1.801,
+                                     MonthlyRafScore*1.058))),
+         MonthlyDemoRafScore = ifelse(MonthlyStatusFlag ==1, DemoRafScore*1.02,
+                       ifelse(MonthlyStatusFlag ==2, DemoRafScore*1.056,
+                              ifelse(MonthlyStatusFlag ==3, DemoRafScore*1.558,
+                                     DemoRafScore*0.911)))) %>%
+  summarise(pr = n()/12,
+            raf1 = mean(MonthlyHCCRaf),
+            raf2 = mean(MonthlyDemoRafScore))%>%
+  group_by(PatientId) %>%
+   summarise(HCCRaf = weighted.mean(raf1, pr),
+            DemoRaf = weighted.mean(raf2, pr)) %>%
+  select(PatientId, HCCRaf, DemoRaf) %>%
+  distinct() %>%
+  as.data.frame()
+```
+#return the major enrollment type
+```{r}
+final17_enroll = final17_raf1%>% 
+  group_by(PatientId, MonthlyStatusName) %>%
+  summarise(pr = n()/12) %>%
+  mutate(major_pr = max(pr))%>%
+  filter(pr == major_pr) %>%
+  select(PatientId, MonthlyStatusName)%>%
+  distinct()%>%
+  as.data.frame()
+final17_enroll %>%
+  group_by(PatientId) %>%
+  summarise(cnt = n()) %>%
+  filter(cnt>1)
+#assign half-half to 2018 enrollment type
+final17_enroll$MonthlyStatusName[final17_enroll$PatientId==754] = 'AgedNonDual'
+final17_enroll$MonthlyStatusName[final17_enroll$PatientId==3816] = 'AgedNonDual'
+final17_enroll$MonthlyStatusName[final17_enroll$PatientId==11562] = 'AgedDual'
+final17_enroll$MonthlyStatusName[final17_enroll$PatientId==18525] = 'AgedDual'
+```
+```{r}
+
+final17_pat = final17 %>%
+  select(PatientId, Sex, Age, AssignmentStepFlag) %>%
+  inner_join(final17_enroll, by = 'PatientId')%>%
+  rename(MajorEnrollType =MonthlyStatusName)%>%
+  inner_join(final17_raf2_agg, by = 'PatientId') %>%
+  distinct() %>%
+  as.data.frame()
+write.csv(final17_pat,"C:/Users/tianyi.fang/Desktop/TF/projects/ACO/HighCostPatient/final17_pat.csv", row.names = FALSE )
+```
+2018 final excel file
+```{r}
+final18 = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\VCFMC ACO  Reports\\Assignment reports\\2018_final_table1_1.csv', header = TRUE,stringsAsFactors =FALSE)
+```
+create a function to calculate final patient raf since both 2017 and 2018 final table have same format-----involve renormalization
+```{r}
+final_raf_func <- function(table1_1, patient_tb, cms_tb, y){
+  #1. match with patient_table in that year
+  table1_1 = patient_tb %>%
+    filter(Year == y) %>%
+    select(HICN, PatientId) %>%
+    distinct() %>%
+    inner_join(table1_1, by = 'HICN')
+
+  #2. get monthly enrollment status
+   table1_1_mr =  table1_1 %>%
+     select(-c(PatientName,Sex,CountyName, StateName, AssignmentStepFlag)) %>%
+     gather(key = 'Month', value = 'MonthlyStatusFlag', MonthlyEligibilityFlag1:MonthlyEligibilityFlag12 ) %>%
+     mutate(Month = as.numeric(gsub('[^0-9]', '',Month))) %>%
+     select(c(HICN, PatientId, Month, MonthlyStatusFlag)) %>%
+     inner_join(
+       table1_1 %>%
+       select(-c(PatientName,Sex, CountyName, StateName, AssignmentStepFlag)) %>%
+       gather(key = 'Month', value = 'MonthlyRafScore', MonthlyCMSHCCRiskScore1: MonthlyCMSHCCRiskScore12) %>%
+       mutate(Month = as.numeric(gsub('[^0-9]', '',Month))) %>%
+       select(c(HICN, PatientId,Month, MonthlyRafScore))
+     , by = c('HICN', 'PatientId', 'Month')
+     ) %>%
+     mutate(MonthlyStatusName = ifelse(MonthlyStatusFlag == 1,'ESRD',
+                                    ifelse(MonthlyStatusFlag == 2,'Disabled',
+                                           ifelse(MonthlyStatusFlag == 3, 'AgedDual', 
+                                                  ifelse(MonthlyStatusFlag == 4, 'AgedNonDual', 'Dead')))),
+            Year = y) %>%
+     select(HICN, PatientId,Year, Month, MonthlyStatusName, MonthlyStatusFlag, MonthlyRafScore) %>%
+     arrange(PatientId, HICN,Year,  Month)
+
+  #3. get the demo RAF score. Notice if one patient is in 2 category, then the Demo Raf will also be in these 2 categories.
+  table1_1_dr = table1_1 %>%
+    select(HICN, PatientId, DemographicRiskScoreforESRDStatus, DemographicRiskScoreforDisabledStatus, DemographicRiskScoreforAgedDualStatus, DemographicRiskScoreforAgedNonDualStatus) %>%
+    gather(key = 'MonthlyStatusName', value = 'DemoRafScore', DemographicRiskScoreforESRDStatus:DemographicRiskScoreforAgedNonDualStatus ) %>%
+    mutate(MonthlyStatusName = gsub('.*for', '', MonthlyStatusName)) %>%
+    mutate(MonthlyStatusName = gsub('Status.*', '', MonthlyStatusName)) %>%
+    filter(!is.na(DemoRafScore))%>%
+    arrange(PatientId, HICN,MonthlyStatusName) 
+
+  #4. combine the monthly RAF and Demo RAF
+  table1_1_raf = table1_1_mr %>%
+    inner_join(table1_1_dr, by = c('PatientId', 'MonthlyStatusName')) %>%
+    select(PatientId,Year, Month, MonthlyStatusName,MonthlyStatusFlag, MonthlyRafScore, DemoRafScore) %>%
+    distinct() %>%
+    arrange(PatientId)
+
+  #5. Aggregate to yearly raf
+  table1_1_raf_agg = table1_1_raf%>% 
+  group_by(PatientId, MonthlyStatusName) %>% #do de-renormalize
+  mutate(MonthlyHCCRaf = ifelse(MonthlyStatusFlag == 1, MonthlyRafScore*cms_tb$ESRD[cms_tb$Year == y & cms_tb$Type =='FinalHCC'],
+                       ifelse(MonthlyStatusFlag == 2, MonthlyRafScore*cms_tb$Disabled[cms_tb$Year == y & cms_tb$Type =='FinalHCC'],
+                              ifelse(MonthlyStatusFlag == 3, MonthlyRafScore*cms_tb$AgedDual[cms_tb$Year == y & cms_tb$Type =='FinalHCC'],
+                                     MonthlyRafScore*cms_tb$AgedNonDual[cms_tb$Year == y & cms_tb$Type =='FinalHCC']))),
+         MonthlyDemoRafScore = ifelse(MonthlyStatusFlag ==1, DemoRafScore*cms_tb$ESRD[cms_tb$Year == y & cms_tb$Type =='FinalDemo'],
+                       ifelse(MonthlyStatusFlag ==2, DemoRafScore*cms_tb$Disabled[cms_tb$Year == y & cms_tb$Type =='FinalDemo'],
+                              ifelse(MonthlyStatusFlag ==3, DemoRafScore*cms_tb$AgedDual[cms_tb$Year == y & cms_tb$Type =='FinalDemo'],
+                                      DemoRafScore*cms_tb$AgedNonDual[cms_tb$Year == y & cms_tb$Type =='FinalDemo'])))) %>%
+    summarise(pr = n()/12,
+            raf1 = mean(MonthlyHCCRaf),
+            raf2 = mean(MonthlyDemoRafScore))%>%
+    as.data.frame() %>%
+  group_by(PatientId) %>%
+   summarise(HCCRaf = weighted.mean(raf1, pr),
+            DemoRaf = weighted.mean(raf2, pr)) %>%
+  select(PatientId, HCCRaf, DemoRaf) %>%
+  distinct() %>%
+  as.data.frame()
+ 
+  #6. Get the major enrollment type
+  table1_1_enroll = table1_1_raf%>%
+    group_by(PatientId, MonthlyStatusName) %>%
+    summarise(pr = n()/12) %>%
+    mutate(major_pr = max(pr))%>%
+    filter(pr == major_pr) %>%
+    select(PatientId, MonthlyStatusName)%>%
+    distinct()%>%
+    as.data.frame()
+  table1_1_enroll =  table1_1_enroll%>%
+    group_by(PatientId) %>%
+    mutate(n= row_number())%>%
+    mutate(latest_n = max(n)) %>%
+    filter(n == latest_n)%>%
+    select(-c(latest_n,n)) %>%
+    as.data.frame()
+
+  #7. final pat_raf_table
+  table1_1_pat = table1_1 %>%
+    select(PatientId, Sex, Age, AssignmentStepFlag) %>%
+    inner_join( table1_1_enroll, by = 'PatientId')%>%
+    rename(MajorEnrollType = MonthlyStatusName)%>%
+    inner_join( table1_1_raf_agg, by = 'PatientId') %>%
+    distinct() %>%
+    as.data.frame()
+  return(table1_1_pat)
+}
+
+final17_pat = final_raf_func(final17, patient1718_v2, cms_stands, 2017)
+final18_pat = final_raf_func(final18, patient1718_v2, cms_stands, 2018)
+write.csv(final17_pat, 'C:/Users/tianyi.fang/Desktop/TF/projects/ACO/HighCostPatient/final17_pat.csv', row.names = FALSE)
+write.csv(final18_pat, 'C:/Users/tianyi.fang/Desktop/TF/projects/ACO/HighCostPatient/final18_pat.csv', row.names = FALSE)
+```
+## this version is not consider renormalization
+```{r}
+final_raf_func2 <- function(table1_1, patient_tb,y){
+  #1. match with patient_table in that year
+  table1_1 = patient_tb %>%
+    filter(Year == y) %>%
+    select(HICN, PatientId) %>%
+    distinct() %>%
+    inner_join(table1_1, by = 'HICN')
+
+  #2. get monthly enrollment status
+   table1_1_mr =  table1_1 %>%
+     select(-c(PatientName,Sex,CountyName, StateName, AssignmentStepFlag)) %>%
+     gather(key = 'Month', value = 'MonthlyStatusFlag', MonthlyEligibilityFlag1:MonthlyEligibilityFlag12 ) %>%
+     mutate(Month = as.numeric(gsub('[^0-9]', '',Month))) %>%
+     select(c(HICN, PatientId, Month, MonthlyStatusFlag)) %>%
+     inner_join(
+       table1_1 %>%
+       select(-c(PatientName,Sex, CountyName, StateName, AssignmentStepFlag)) %>%
+       gather(key = 'Month', value = 'MonthlyRafScore', MonthlyCMSHCCRiskScore1: MonthlyCMSHCCRiskScore12) %>%
+       mutate(Month = as.numeric(gsub('[^0-9]', '',Month))) %>%
+       select(c(HICN, PatientId,Month, MonthlyRafScore))
+     , by = c('HICN', 'PatientId', 'Month')
+     ) %>%
+     mutate(MonthlyStatusName = ifelse(MonthlyStatusFlag == 1,'ESRD',
+                                    ifelse(MonthlyStatusFlag == 2,'Disabled',
+                                           ifelse(MonthlyStatusFlag == 3, 'AgedDual', 
+                                                  ifelse(MonthlyStatusFlag == 4, 'AgedNonDual', 'Dead')))),
+            Year = y) %>%
+     select(HICN, PatientId,Year, Month, MonthlyStatusName, MonthlyStatusFlag, MonthlyRafScore) %>%
+     arrange(PatientId, HICN,Year,  Month)
+
+  #3. get the demo RAF score. Notice if one patient is in 2 category, then the Demo Raf will also be in these 2 categories.
+  table1_1_dr = table1_1 %>%
+    select(HICN, PatientId, DemographicRiskScoreforESRDStatus, DemographicRiskScoreforDisabledStatus, DemographicRiskScoreforAgedDualStatus, DemographicRiskScoreforAgedNonDualStatus) %>%
+    gather(key = 'MonthlyStatusName', value = 'DemoRafScore', DemographicRiskScoreforESRDStatus:DemographicRiskScoreforAgedNonDualStatus ) %>%
+    mutate(MonthlyStatusName = gsub('.*for', '', MonthlyStatusName)) %>%
+    mutate(MonthlyStatusName = gsub('Status.*', '', MonthlyStatusName)) %>%
+    filter(!is.na(DemoRafScore))%>%
+    arrange(PatientId, HICN,MonthlyStatusName) 
+
+  #4. combine the monthly RAF and Demo RAF
+  table1_1_raf = table1_1_mr %>%
+    inner_join(table1_1_dr, by = c('PatientId', 'MonthlyStatusName')) %>%
+    select(PatientId,Year, Month, MonthlyStatusName,MonthlyStatusFlag, MonthlyRafScore, DemoRafScore) %>%
+    distinct() %>%
+    arrange(PatientId)
+
+  #5. Aggregate to yearly raf
+  table1_1_raf_agg = table1_1_raf%>% 
+  group_by(PatientId, MonthlyStatusName) %>% 
+    summarise(pr = n()/12,
+            raf1 = mean(MonthlyRafScore),
+            raf2 = mean(DemoRafScore))%>%
+    as.data.frame() %>%
+  group_by(PatientId) %>%
+   summarise(HCCRaf = weighted.mean(raf1, pr),
+            DemoRaf = weighted.mean(raf2, pr)) %>%
+  select(PatientId, HCCRaf, DemoRaf) %>%
+  distinct() %>%
+  as.data.frame()
+ 
+  #6. Get the major enrollment type
+  table1_1_enroll = table1_1_raf%>%
+    group_by(PatientId, MonthlyStatusName) %>%
+    summarise(pr = n()/12) %>%
+    mutate(major_pr = max(pr))%>%
+    filter(pr == major_pr) %>%
+    select(PatientId, MonthlyStatusName)%>%
+    distinct()%>%
+    as.data.frame()
+  table1_1_enroll =  table1_1_enroll%>%
+    group_by(PatientId) %>%
+    mutate(n= row_number())%>%
+    mutate(latest_n = max(n)) %>%
+    filter(n == latest_n)%>%
+    select(-c(latest_n,n)) %>%
+    as.data.frame()
+
+  #7. final pat_raf_table
+  table1_1_pat = table1_1 %>%
+    select(PatientId, Sex, Age, AssignmentStepFlag) %>%
+    inner_join( table1_1_enroll, by = 'PatientId')%>%
+    rename(MajorEnrollType = MonthlyStatusName)%>%
+    inner_join( table1_1_raf_agg, by = 'PatientId') %>%
+    distinct() %>%
+    as.data.frame()
+  return(table1_1_pat)
+}
+final17_pat2 = final_raf_func2(final17, patient1718_v2, 2017)
+final18_pat2 = final_raf_func2(final18, patient1718_v2, 2018) 
+
+```
+
+
+2017 final table1_1 has different data frame as 2018 init. 
+Uing 2018Priliminary table1_1 for patients' info
+but remember 2018 Init has no DemoRaf, and a lot of patients have no HCCRafs for neither 4 categories. So drop them.
+```{r}
+Init2018 =  sqlQuery(qvhchannel, "SELECT [HICN]
+      ,concat( upper([FirstName]) ,' ' , upper(lastname)) as PatientName
+      ,case when [SEX] = 1 then 'Male' WHEN [Sex] =2 then 'Female' ELSE  'Unknown' end as Sex
+      ,cast(LEFT(ReportDate, 4) as int) - left([BirthDate], 4) as Age
+      ,AssignmentStepFlag
+      ,[MonthlyEligibilityFlag1]
+      ,[MonthlyEligibilityFlag2]
+      ,[MonthlyEligibilityFlag3]
+      ,[MonthlyEligibilityFlag4]
+      ,[MonthlyEligibilityFlag5]
+      ,[MonthlyEligibilityFlag6]
+      ,[MonthlyEligibilityFlag7]
+      ,[MonthlyEligibilityFlag8]
+      ,[MonthlyEligibilityFlag9]
+      ,[MonthlyEligibilityFlag10]
+      ,[MonthlyEligibilityFlag11]
+      ,[MonthlyEligibilityFlag12]
+      ,[CMSHCCRiskScoreforESRDStatus] as ESRD
+      ,[CMSHCCRiskScoreforDisabledStatus] as Disabled
+      ,[CMSHCCRiskScoreforAgedDualStatus] as AgedDual
+      ,[CMSHCCRiskScoreforAgedNonDualStatus] as AgedNonDual
+  FROM [QVHSACODataLoad].[dbo].[table1_1_full] where ReportDate = '2018_init' ", stringsAsFactors = FALSE)
+# remove all leading/tailing whitespace
+
+j = sapply(Init2018, is.character) 
+Init2018[j] <- lapply(Init2018[j], trimws, which = 'both')
+
+Init2018 = alex_patient %>%
+  select(HICN, PatientId) %>%
+  distinct() %>%
+  inner_join(Init2018, by = 'HICN')
+```
+```{r}
+#init2018 status
+init2018_ms = Init2018 %>%
+    select(-c(PatientName, Sex)) %>%
+  gather(key = 'Month', value = 'MonthlyStatusFlag', MonthlyEligibilityFlag1:MonthlyEligibilityFlag12) %>%
+  mutate(Month = as.numeric(gsub('[^0-9]', '',Month))) %>%
+  select(c(HICN, PatientId, Month, MonthlyStatusFlag)) %>%
+  mutate(MonthlyStatusName = ifelse(MonthlyStatusFlag == 1,'ESRD',
+                                    ifelse(MonthlyStatusFlag == 2,'Disabled',
+                                           ifelse(MonthlyStatusFlag == 3, 'AgedDual', 
+                                                  ifelse(MonthlyStatusFlag == 4, 'AgedNonDual', 'Dead'))))) %>%
+  arrange(PatientId, Month) %>%
+  as.data.frame()
+#init2018 raf score for each status
+init2018_mr1 = Init2018 %>%
+  select(HICN, PatientId, ESRD, Disabled, AgedDual, AgedNonDual) %>%
+  mutate(ESRD = ESRD/cms_raf$ESRD[cms_raf$Year == 2018],
+         Disabled = Disabled/cms_raf$Disabled[cms_raf$Year == 2018],
+         AgedDual = AgedDual/cms_raf$AgedDual[cms_raf$Year == 2018],
+         AgedNonDual = AgedNonDual/cms_raf$AgedNonDual[cms_raf$Year == 2018]) %>%
+  gather(key = 'MonthlyStatusName', value = 'MonthlyRafScore', ESRD:AgedNonDual)
+#get the de-remornalized
+init2018_mr2 = init2018_mr1 %>%
+  group_by(PatientId) %>%
+  mutate(avghccraf = mean(MonthlyRafScore, na.rm = TRUE)) %>%
+  inner_join(init2018_ms,  by =c('HICN', 'PatientId','MonthlyStatusName'))%>%
+  inner_join(cms_raf_t %>%select(c('category', 'Init2018')), by = c('MonthlyStatusName' = 'category')) %>%
+  group_by(PatientId) %>%
+  mutate(MonthlyRafScore1 = ifelse(!is.na(MonthlyRafScore),MonthlyRafScore,
+                                    Init2018*avghccraf)) %>%
+  select(PatientId, HICN, Month, MonthlyStatusName, MonthlyRafScore1) %>%
+  arrange(PatientId) %>%
+  as.data.frame()
+#drop output
+init2018_raf = init2018_mr2 %>%
+    left_join(alex_optout_2018, by = c('PatientId'='PatientId','Month' = 'month', 'HICN'= 'HICN'))%>%
+  filter(!is.na(HICN))%>% # if the HICN is not null, then means in that month, this HICN is optout.
+  select(-c(HICN, year))
+
+init2018_raf2 = init2018_raf  %>%
+  group_by(PatientId, MonthlyStatusName) %>%
+  summarise(pr = n()/12,
+            raf1 = mean(MonthlyRafScore1))%>%
+  group_by(PatientId) %>%
+  summarise(HCCRaf = weighted.mean(raf1, pr))
+init2018_demo = Init2018 %>%
+  select(PatientId, Sex, Age, AssignmentStepFlag)
+```
+
+
+
+
+
+2018 table1_1 Q4
+```{r}
+ 
+q42018 =  sqlQuery(qvhchannel, "SELECT [HICN]
+      ,concat( upper([FirstName]) ,' ' , upper(lastname)) as PatientName
+      ,case when [SEX] = 1 then 'Male' WHEN [Sex] =2 then 'Female' ELSE  'Unknown' end as Sex
+      ,cast(LEFT(ReportDate, 4) as int) - left([BirthDate], 4) as Age
+      ,[ClaimsBasedAssignmentStepFlag] as AssignmentStepFlag
+      ,[MonthlyEligibilityFlag1]
+      ,[MonthlyEligibilityFlag2]
+      ,[MonthlyEligibilityFlag3]
+      ,[MonthlyEligibilityFlag4]
+      ,[MonthlyEligibilityFlag5]
+      ,[MonthlyEligibilityFlag6]
+      ,[MonthlyEligibilityFlag7]
+      ,[MonthlyEligibilityFlag8]
+      ,[MonthlyEligibilityFlag9]
+      ,[MonthlyEligibilityFlag10]
+      ,[MonthlyEligibilityFlag11]
+      ,[MonthlyEligibilityFlag12]
+      ,[CMSHCCRiskScoreforESRDStatus] as ESRD
+      ,[CMSHCCRiskScoreforDisabledStatus] as Disabled
+      ,[CMSHCCRiskScoreforAgedDualStatus] as AgedDual
+      ,[CMSHCCRiskScoreforAgedNonDualStatus] as AgedNonDual
+      ,[DemographicRiskScoreforESRDStatus] AS DemoESRD
+      ,[DemographicRiskScoreforDisabledStatus] AS DemoDisabled
+      ,[DemographicRiskScoreforAgedDualStatus] as DemoAgedDual
+      ,[DemographicRiskScoreforAgedNonDualStatus] as DemoAgedNonDual
+  FROM [QVHSACODataLoad].[dbo].[table1_1_full] where ReportDate = '2018_q4' ", stringsAsFactors = FALSE)
+# remove all leading/tailing whitespace
+
+j = sapply(q42018, is.character) 
+q42018[j] <- lapply(q42018[j], trimws, which = 'both')
+
+q42018 = patient1718 %>%
+  select(HICN, PatientId) %>%
+  distinct() %>%
+  inner_join(q42018, by = 'HICN')
+```
+2018q4 RAF
+```{r}
+
+#####################Step1 get monthly status ################################
+  q42018_ms = q42018 %>%
+    select(-c(PatientName, Sex)) %>%
+  gather(key = 'Month', value = 'MonthlyStatusFlag', MonthlyEligibilityFlag1:MonthlyEligibilityFlag12) %>%
+  mutate(Month = as.numeric(gsub('[^0-9]', '',Month))) %>%
+  select(c(HICN, PatientId, Month, MonthlyStatusFlag)) %>%
+  mutate(MonthlyStatusName = ifelse(MonthlyStatusFlag == 1,'ESRD',
+                                    ifelse(MonthlyStatusFlag == 2,'Disabled',
+                                           ifelse(MonthlyStatusFlag == 3, 'AgedDual', 
+                                                  ifelse(MonthlyStatusFlag == 4, 'AgedNonDual', 'Dead'))))) %>%
+  arrange(PatientId, Month) %>%
+  as.data.frame()
+
+#see whether there are patients who have multiple status in 2018
+# q42018_ms2 = q42018_ms %>%
+#   filter(MonthlyStatusName != 'Dead')%>%
+#   group_by(PatientId) %>%
+#   mutate(cnt = n_distinct(MonthlyStatusName)) %>%
+#   filter(cnt>1) %>%
+#   select(-cnt) %>%
+#     as.data.frame()
+#   #97 patients, 19, 42, 76, 202, 318
+# q42018_ms1 =q42018_ms %>%
+#   filter(MonthlyStatusName != 'Dead')%>%
+#   group_by(PatientId) %>%
+#   mutate(cnt = n_distinct(MonthlyStatusName)) %>%
+#   filter(cnt==1) %>%
+#   select(-cnt)%>%
+#     as.data.frame()
+#   #7856
+################################################################################
+#####################Step2: Monthly HCC&Demo Raf Score
+################################################################################
+#get monthly Raf of both HCC and Demo--renromalized for both of them seperately. 
+#The reason of using 2019 is 2019init = 2018q4
+q42018_mr1 = q42018 %>%
+  select(HICN, PatientId, ESRD, Disabled, AgedDual, AgedNonDual) %>%
+  mutate(ESRD = ESRD*cms_raf$ESRD[cms_raf$Year == 2019],
+         Disabled = Disabled*cms_raf$Disabled[cms_raf$Year == 2019],
+         AgedDual = AgedDual*cms_raf$AgedDual[cms_raf$Year == 2019],
+         AgedNonDual = AgedNonDual*cms_raf$AgedNonDual[cms_raf$Year == 2019]) %>%
+  gather(key = 'MonthlyStatusName', value = 'MonthlyRafScore', ESRD:AgedNonDual)%>% #that's Monthly HCC Rafs
+  inner_join(q42018 %>%
+               select(HICN, PatientId, DemoESRD,DemoDisabled, DemoAgedDual, DemoAgedNonDual) %>%
+               mutate(DemoESRD = DemoESRD*cms_raf$ESRD[cms_raf$Year == 'demo2018'],
+                      DemoDisabled = DemoDisabled*cms_raf$Disabled[cms_raf$Year == 'demo2018'],
+                      DemoAgedDual = DemoAgedDual*cms_raf$AgedDual[cms_raf$Year == 'demo2018'],
+                      DemoAgedNonDual = DemoAgedNonDual*cms_raf$AgedNonDual[cms_raf$Year == 'demo2018']) %>%
+               gather(key = 'MonthlyStatusName', value = 'MonthlyDemoRafScore', DemoESRD:DemoAgedNonDual) %>%
+               mutate(MonthlyStatusName =gsub('Demo', '', MonthlyStatusName)),
+             by = c('HICN', 'PatientId','MonthlyStatusName')) %>%#that's Monthly Demo Rafs
+  arrange(PatientId)  
+length(unique(q42018_mr1$PatientId)) #7953
+```
+```{r}
+###########################################################################
+#####################Step3. calculate Rafs for each month even for those patients who have >1 status in 12 mo.
+###########################################################################
+q42018_mr2 = q42018_mr1 %>%
+  group_by(PatientId) %>%
+  mutate(avghccraf = mean(MonthlyRafScore, na.rm = TRUE),
+         avgdemoraf = mean(MonthlyDemoRafScore, na.rm = TRUE)) %>%
+  inner_join(q42018_ms,  by =c('HICN', 'PatientId','MonthlyStatusName'))%>%
+  inner_join(cms_raf_t %>%select(c('category', 'Init2019', 'Initdemo2019')), by = c('MonthlyStatusName' = 'category')) %>%
+  group_by(PatientId) %>%
+  mutate(MonthlyRafScore1 = ifelse(!is.na(MonthlyRafScore),MonthlyRafScore,
+                                    Init2019*avghccraf),
+         MonthlyDemoRafScore1 = ifelse(!is.na(MonthlyDemoRafScore),MonthlyDemoRafScore,
+                                    Initdemo2019*avgdemoraf)) %>%
+  select(PatientId, HICN, Month, MonthlyStatusName, MonthlyRafScore1, MonthlyDemoRafScore1) %>%
+  arrange(PatientId) %>%
+  as.data.frame()
+```
+
+```{r}
+#######################################################
+#####################Step4. Filter out optout patients
+######################################################
+q42018_raf = q42018_mr2 %>%
+    left_join(optout2018, by = c('PatientId'='PatientId','Month' = 'month', 'HICN'= 'HICN'))%>%
+  filter(!is.na(HICN))%>% # if the HICN is not null, then means in that month, this HICN is optout.
+  select(-c(HICN))
+```
+
+```{r}
+#############################################################################
+#####################Step5. Calculate the weighted mean raf for each patients
+##############################################################################
+q42018_raf2_agg = q42018_raf  %>%
+  group_by(PatientId, MonthlyStatusName) %>%
+  summarise(pr = n()/12,
+            raf1 = mean(MonthlyRafScore1),
+            raf2 = mean(MonthlyDemoRafScore1))%>%
+  group_by(PatientId) %>%
+  summarise(HCCRaf = weighted.mean(raf1, pr),
+            DemoRaf = weighted.mean(raf2, pr))
+```
+```{r}
+#get 2018 major enrollment type
+q42018_enroll = q42018_raf%>%
+  group_by(PatientId, MonthlyStatusName) %>%
+  summarise(pr = n()/12) %>%
+  mutate(major_pr = max(pr)) %>%
+  filter(pr ==major_pr) %>%
+  select(PatientId, MonthlyStatusName) %>%
+  as.data.frame()
+
+q42018_enroll = q42018_enroll %>%
+  group_by(PatientId) %>%
+  mutate(n= row_number())%>%
+  mutate(latest_n = max(n)) %>%
+  filter(n == latest_n)%>%
+  select(-c(latest_n,n)) %>%
+  as.data.frame()
+```
+2018 Patients with their demo as header
+```{r}
+q42018_pat = q42018 %>%
+  select(PatientId, Sex, Age, AssignmentStepFlag)%>%
+  inner_join(q42018_enroll, by = 'PatientId') %>%
+  inner_join(q42018_raf2_agg, by = 'PatientId') %>%
+  rename(MajorEnrollType= MonthlyStatusName )%>%
+  as.data.frame()
+write.csv(q42018_pat, "C:/Users/tianyi.fang/Desktop/TF/projects/ACO/HighCostPatient/q42018_pat.csv", row.names = FALSE)
+```
+
+*************************************** 08/15/2019 ******************************************************************************************
+*********************************************************************************************************************************************
+cclf_year_raw is cclf file after matching with patient1718, optout, and be assigned ClaimId and Chronic Code. --- For Tableau detailed report
+cclf_year_agg is cclf_year_raw aggregated with measures ---- for Prediction model
+*********************************************************************************************************************************************
+*********************************************************************************************************************************************
+
+1.CCLF1----update: query cclf1&2 together 08/11/2019
+only save the claim with >0 payment.
+```{r}
+#get from cclf1 OF 2017
+cclf1_2017 = sqlQuery(qvhchannel, "with cclf1 as (
+SELECT distinct CUR_CLM_UNIQ_ID,  BENE_HIC_NUM
+      ,BENE_EQTBL_BIC_HICN_NUM, CLM_ADJSMT_TYPE_CD,
+     case when CLM_ADJSMT_TYPE_CD = '1' then
+          case when CLM_PMT_AMT> 0 then - CLM_PMT_AMT*1.02
+	      else - CLM_PMT_AMT end
+     else
+          case when CLM_PMT_AMT>0 then CLM_PMT_AMT*1.02
+          else CLM_PMT_AMT end
+	end as CLM_PMT_AMT,
+	month(clm_thru_dt) as MONTH, 'cclf1' as CLF,DATEDIFF(day, CLM_FROM_DT, CLM_THRU_DT) as StayDate, CLM_FROM_DT,
+CLM_THRU_DT, CLM_EFCTV_DT as CLM_IDR_LD_DT,[CLM_TYPE_CD], [PRNCPL_DGNS_CD],[ADMTG_DGNS_CD] ,[CLM_ADMSN_TYPE_CD],[CLM_ADMSN_SRC_CD]
+  FROM CCLF1_PartAClaimsHeaderFile
+  where year(clm_thru_dt) = 2017 AND DATEDIFF(day, CLM_THRU_DT, CLM_EFCTV_DT) <=90 and clm_mdcr_npmt_rsn_cd = '' and clm_type_cd not in (14, 15, 44,45) and CLM_BILL_FAC_TYPE_CD not in (14, 15, 44,45)
+ )
+ , cclf2 as (
+SELECT distinct [CUR_CLM_UNIQ_ID]
+      ,[CLM_LINE_NUM]
+      ,[CLM_LINE_PROD_REV_CTR_CD]
+      ,[CLM_LINE_HCPCS_CD]
+      ,[CLM_FROM_DT]
+      ,[CLM_THRU_DT]
+      ,[CLM_LINE_SRVC_UNIT_QTY]
+      ,[CLM_LINE_CVRD_PD_AMT]
+  FROM [QVHSACOPortal].[dbo].[CCLF2_PartAClaimsRevenueCenterDetailFile] where 
+  year(clm_thru_dt) = 2017 and 
+  ((CLM_LINE_PROD_REV_CTR_CD >= '0450' and CLM_LINE_PROD_REV_CTR_CD <= '0459') or (CLM_LINE_PROD_REV_CTR_CD = '0981'))
+  --order by CUR_CLM_UNIQ_ID
+  ), cclf2_2 as (
+  select CUR_CLM_UNIQ_ID, count(CLM_LINE_PROD_REV_CTR_CD) as cnt_ed
+  from cclf2
+  group by CUR_CLM_UNIQ_ID
+
+ )
+, cclf1_2 as (
+select c1.*, case when c1.CLM_ADJSMT_TYPE_CD = 1 then - c2.cnt_ed else c2.cnt_ed end as cnt_ed from cclf1 as c1
+left join cclf2_2 as c2 on c1.CUR_CLM_UNIQ_ID = c2.CUR_CLM_UNIQ_ID
+)
+select BENE_HIC_NUM, BENE_EQTBL_BIC_HICN_NUM, MONTH, CLF, StayDate, CLM_FROM_DT, CLM_THRU_DT, CLM_TYPE_CD, PRNCPL_DGNS_CD, ADMTG_DGNS_CD,CLM_ADMSN_TYPE_CD, CLM_ADMSN_SRC_CD, SUM(CLM_PMT_AMT) AS clm_pmt, sum(cnt_ed) as Cnt_ed
+FROM cclf1_2 
+group by BENE_HIC_NUM, BENE_EQTBL_BIC_HICN_NUM, MONTH, CLF, StayDate, CLM_FROM_DT, CLM_THRU_DT, CLM_TYPE_CD, PRNCPL_DGNS_CD, ADMTG_DGNS_CD,CLM_ADMSN_TYPE_CD, CLM_ADMSN_SRC_CD
+ having sum(clm_pmt_amt) >0
+  ",stringsAsFactors = FALSE)
+j = sapply(cclf1_2017, is.character) # remove all leading/tailing whitespace
+cclf1_2017[j] <- lapply(cclf1_2017[j], trimws, which = 'both')
+
+#get from cclf1 OF 2018
+cclf1_2018 = sqlQuery(qvhchannel, "with cclf1 as (
+SELECT distinct CUR_CLM_UNIQ_ID,  BENE_HIC_NUM
+      ,BENE_EQTBL_BIC_HICN_NUM, CLM_ADJSMT_TYPE_CD,
+     case when CLM_ADJSMT_TYPE_CD = '1' then
+          case when CLM_PMT_AMT> 0 then - CLM_PMT_AMT*1.02
+	      else - CLM_PMT_AMT end
+     else
+          case when CLM_PMT_AMT>0 then CLM_PMT_AMT*1.02
+          else CLM_PMT_AMT end
+	end as CLM_PMT_AMT,
+	month(clm_thru_dt) as MONTH, 'cclf1' as CLF,DATEDIFF(day, CLM_FROM_DT, CLM_THRU_DT) as StayDate, CLM_FROM_DT,
+CLM_THRU_DT, CLM_EFCTV_DT as CLM_IDR_LD_DT,[CLM_TYPE_CD], [PRNCPL_DGNS_CD],[ADMTG_DGNS_CD] ,[CLM_ADMSN_TYPE_CD],[CLM_ADMSN_SRC_CD]
+  FROM CCLF1_PartAClaimsHeaderFile
+  where year(clm_thru_dt) = 2018 AND DATEDIFF(day, CLM_THRU_DT, CLM_EFCTV_DT) <=90 and clm_mdcr_npmt_rsn_cd = '' and clm_type_cd not in (14, 15, 44,45) and CLM_BILL_FAC_TYPE_CD not in (14, 15, 44,45)
+ )
+ , cclf2 as (
+SELECT distinct [CUR_CLM_UNIQ_ID]
+      ,[CLM_LINE_NUM]
+      ,[CLM_LINE_PROD_REV_CTR_CD]
+      ,[CLM_LINE_HCPCS_CD]
+      ,[CLM_FROM_DT]
+      ,[CLM_THRU_DT]
+      ,[CLM_LINE_SRVC_UNIT_QTY]
+      ,[CLM_LINE_CVRD_PD_AMT]
+  FROM [QVHSACOPortal].[dbo].[CCLF2_PartAClaimsRevenueCenterDetailFile] where 
+  year(clm_thru_dt) = 2018 and 
+  ((CLM_LINE_PROD_REV_CTR_CD >= '0450' and CLM_LINE_PROD_REV_CTR_CD <= '0459') or (CLM_LINE_PROD_REV_CTR_CD = '0981'))
+  --order by CUR_CLM_UNIQ_ID
+  ), cclf2_2 as (
+  select CUR_CLM_UNIQ_ID, count(CLM_LINE_PROD_REV_CTR_CD) as cnt_ed
+  from cclf2
+  group by CUR_CLM_UNIQ_ID
+
+ )
+, cclf1_2 as (
+select c1.*, case when c1.CLM_ADJSMT_TYPE_CD = 1 then - c2.cnt_ed else c2.cnt_ed end as cnt_ed from cclf1 as c1
+left join cclf2_2 as c2 on c1.CUR_CLM_UNIQ_ID = c2.CUR_CLM_UNIQ_ID
+)
+select BENE_HIC_NUM, BENE_EQTBL_BIC_HICN_NUM, MONTH, CLF, StayDate, CLM_FROM_DT, CLM_THRU_DT, CLM_TYPE_CD, PRNCPL_DGNS_CD, ADMTG_DGNS_CD,CLM_ADMSN_TYPE_CD, CLM_ADMSN_SRC_CD, SUM(CLM_PMT_AMT) AS clm_pmt, sum(cnt_ed) as Cnt_ed
+FROM cclf1_2 
+group by BENE_HIC_NUM, BENE_EQTBL_BIC_HICN_NUM, MONTH, CLF, StayDate, CLM_FROM_DT, CLM_THRU_DT, CLM_TYPE_CD, PRNCPL_DGNS_CD, ADMTG_DGNS_CD,CLM_ADMSN_TYPE_CD, CLM_ADMSN_SRC_CD
+ having sum(clm_pmt_amt) >0
+  ",stringsAsFactors = FALSE)
+j = sapply(cclf1_2018, is.character) # remove all leading/tailing whitespace
+cclf1_2018[j] <- lapply(cclf1_2018[j], trimws, which = 'both')
+```
+match function for only get the ACO patient
+```{r}
+match_patient <- function(tb, alex_tb, alex_optout, y){
+   tb = alex_tb %>%
+     filter(Year == y) %>%
+     select(PatientId, HICN, PCPTin, PCPNPI, Year) %>%
+     distinct() %>%
+     inner_join(tb, by = c('HICN' = 'BENE_HIC_NUM')) %>%
+     select(-BENE_EQTBL_BIC_HICN_NUM) %>%
+     distinct() %>%
+     rbind(
+       alex_tb %>%
+         filter(Year == y) %>%
+         select(PatientId, HICN, PCPTin, PCPNPI, Year) %>%
+         distinct() %>%
+         inner_join(tb, by = c('HICN' = 'BENE_EQTBL_BIC_HICN_NUM')) %>%
+         select(-BENE_HIC_NUM)
+    ) %>%
+     select(-HICN) %>%
+     distinct()
+  rownames(tb) <- NULL
+  #filter out optout claim
+   tb=tb%>%
+   left_join(alex_optout, by = c('PatientId'='PatientId','MONTH' = 'month'))%>%
+   filter(is.na(HICN)) %>%
+     select(-HICN)
+  #add ClaimId
+  
+  return(tb)
+}
+#match_patient(cclf1_2017, patient1718,optout2017, 2017)
+```
+
+get the admission measures--inpatient, snf
+```{r}
+#inpatient readmission 60/ SNF readmission 20
+#only pass readm_type = 60 / 20
+readm_func <- function(tb, readm_type){
+  if(readm_type == 60){
+    readm = 'Inp_readm_cnt'
+  }else{readm = 'SNF_readm_cnt'}
+  tb1 = tb %>%
+    filter(CLM_TYPE_CD == readm_type ) %>%
+    select(PatientId, ClaimId, CLM_FROM_DT, CLM_THRU_DT) %>%
+    distinct() %>%
+    arrange(PatientId, CLM_FROM_DT, CLM_THRU_DT) %>%
+    mutate(CLM_FROM_DT = as.Date(as.character(CLM_FROM_DT), format = "%Y-%m-%d"),
+          CLM_THRU_DT = as.Date(as.character( CLM_THRU_DT), format = "%Y-%m-%d"))%>%
+    group_by(PatientId) %>%
+   mutate(rid = row_number(),
+           LastClmDt = lag(CLM_THRU_DT, n = 1, default = NA)) %>%
+   mutate(interval = as.numeric(CLM_FROM_DT - LastClmDt, unites = 'days')) %>%
+   mutate(!!readm := ifelse(is.na(interval), 0,
+                                  ifelse(interval < 30 , 1, 0))) %>%
+    select(c('PatientId', 'ClaimId', readm)) %>%
+    as.data.frame()
+  return(tb1)
+}
+
+#readm_func(cclf1_2017, 20)
+```
+
+1. CCLF1_RAW function to get cclf1 measures-- first for all raw data without aggregation
+```{r}
+get_cclf1_raw <- function(tb,alex_pat, optout, ICD_chronic, y){
+  #match
+  tb1 = match_patient(tb, alex_pat, optout, y)
+  #DO SOME CLEANING
+  tb1$ADMTG_DGNS_CD[tb1$ADMTG_DGNS_CD =='~'] <- NA
+  tb1$CLM_ADMSN_TYPE_CD[tb1$CLM_ADMSN_TYPE_CD =='~'] <- NA
+  tb1$CLM_ADMSN_SRC_CD[tb1$CLM_ADMSN_SRC_CD =='~'] <- NA
+  
+  #CREATE ClaimId AS pk
+   tb1 = tb1 %>%
+     arrange(PatientId, CLM_FROM_DT, CLM_THRU_DT) %>%
+   group_by(PatientId) %>%
+   mutate(id = row_number()) %>%
+   mutate(ClaimId = paste(PatientId, Year, CLF, id, sep = '_')) %>%
+   select(-id) %>%
+   as.data.frame()
+     #ADD chronic indicator
+   tb2 = tb1%>%
+     inner_join(ICD_chronic %>%
+                select(ICD10CM_Code, Chronic_Indicator), by = c('PRNCPL_DGNS_CD' ='ICD10CM_Code')) %>%
+    left_join(readm_func(tb1, 20), by = c('PatientId', 'ClaimId')) %>%
+    left_join(readm_func(tb1, 60), by = c('PatientId', 'ClaimId')) %>%
+    replace(is.na(.), 0)
+ return(tb2)
+}
+cclf1_2017_raw = get_cclf1_raw(cclf1_2017,patient1718_v2, optout2017,  ICD_chronic, 2017)
+cclf1_2018_raw = get_cclf1_raw(cclf1_2018,patient1718_v2, optout2018, ICD_chronic, 2018)
+```
+```{r}
+write.csv(cclf1_2017,"C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\cclf1_2017_raw.csv", row.names = FALSE )
+write.csv(cclf1_2018,"C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\cclf1_2018_raw.csv", row.names = FALSE )
+```
+
+2.CCLF5--- due to large amount of CCLF5, so do cleaning and sum(clm_pmt_amt) here 
+```{r}
+cclf5_2017 = sqlQuery(qvhchannel, "SELECT  distinct CUR_CLM_UNIQ_ID,CLM_LINE_NUM, BENE_HIC_NUM
+      ,BENE_EQTBL_BIC_HICN_NUM, CLM_ADJSMT_TYPE_CD,
+   case when CLM_ADJSMT_TYPE_CD = '1' then
+        case when CAST(clm_line_nch_pmt_amt AS float)> 0 then -CAST(clm_line_nch_pmt_amt AS FLOAT)*1.02
+	    else -CAST(clm_line_nch_pmt_amt AS FLOAT) end
+  else
+        case when CAST(clm_line_nch_pmt_amt AS FLOAT) >0 then CAST(clm_line_nch_pmt_amt AS FLOAT)*1.02
+        else CAST(clm_line_nch_pmt_amt AS FLOAT) end
+  end as CLM_PMT_AMT,
+month(clm_line_thru_dt) as MONTH, 'cclf5' as CLF, DATEDIFF(day, CLM_LINE_FROM_DT, CLM_LINE_THRU_DT) as StayDate,
+clm_line_thru_dt as CLM_THRU_DT,  CLM_EFCTV_DT as CLM_IDR_LD_DT, [CLM_TYPE_CD],CLM_POS_CD, [CLM_LINE_DGNS_CD] as CLM_DGNS_CD,
+ case when CLM_ADJSMT_TYPE_CD = '1' then - CLM_LINE_SRVC_UNIT_QTY
+  else CLM_LINE_SRVC_UNIT_QTY end AS CLM_LINE_SRVC_UNIT_QTY,CLM_LINE_HCPCS_CD
+      from CCLF5_PartBPhysiciansFile
+          where year(clm_thru_dt) = 2017 AND DATEDIFF(day, CLM_THRU_DT, CLM_EFCTV_DT) <=90 AND clm_carr_pmt_dnl_cd not in ('0','D','Y') and clm_prcsg_ind_cd in ('A','R','S')",stringsAsFactors = FALSE)
+
+j = sapply(cclf5_2017, is.character) # remove all leading/tailing whitespace
+cclf5_2017[j] <- lapply(cclf5_2017[j], trimws, which = 'both')
+
+cclf5_2018 = sqlQuery(qvhchannel, "SELECT  distinct CUR_CLM_UNIQ_ID,CLM_LINE_NUM, BENE_HIC_NUM
+      ,BENE_EQTBL_BIC_HICN_NUM, CLM_ADJSMT_TYPE_CD,
+   case when CLM_ADJSMT_TYPE_CD = '1' then
+        case when CAST(clm_line_nch_pmt_amt AS float)> 0 then -CAST(clm_line_nch_pmt_amt AS FLOAT)*1.02
+	    else -CAST(clm_line_nch_pmt_amt AS FLOAT) end
+  else
+        case when CAST(clm_line_nch_pmt_amt AS FLOAT) >0 then CAST(clm_line_nch_pmt_amt AS FLOAT)*1.02
+        else CAST(clm_line_nch_pmt_amt AS FLOAT) end
+  end as CLM_PMT_AMT,
+month(clm_line_thru_dt) as MONTH, 'cclf5' as CLF, DATEDIFF(day, CLM_LINE_FROM_DT, CLM_LINE_THRU_DT) as StayDate,
+clm_line_thru_dt as CLM_THRU_DT,  CLM_EFCTV_DT as CLM_IDR_LD_DT, [CLM_TYPE_CD],CLM_POS_CD, [CLM_LINE_DGNS_CD] as CLM_DGNS_CD,
+ case when CLM_ADJSMT_TYPE_CD = '1' then - CLM_LINE_SRVC_UNIT_QTY
+  else CLM_LINE_SRVC_UNIT_QTY end AS CLM_LINE_SRVC_UNIT_QTY,CLM_LINE_HCPCS_CD
+      from CCLF5_PartBPhysiciansFile
+          where year(clm_thru_dt) = 2018 AND DATEDIFF(day, CLM_THRU_DT, CLM_EFCTV_DT) <=90 AND clm_carr_pmt_dnl_cd not in ('0','D','Y') and clm_prcsg_ind_cd in ('A','R','S')",stringsAsFactors = FALSE)
+
+j = sapply(cclf5_2018, is.character) # remove all leading/tailing whitespace
+cclf5_2018[j] <- lapply(cclf5_2018[j], trimws, which = 'both')
+```
+Get cclf5_raw
+```{r}
+get_cclf5_raw <- function(tb, alex_pat, optout, y, icd_chronic, betos ){
+  tb1= tb %>%
+  group_by(BENE_HIC_NUM, BENE_EQTBL_BIC_HICN_NUM, MONTH,CLF,StayDate,CLM_THRU_DT,CLM_TYPE_CD,CLM_POS_CD,CLM_DGNS_CD,CLM_LINE_HCPCS_CD) %>%
+  summarise(clm_pmt = sum(CLM_PMT_AMT),
+            clm_srv_qty = sum(CLM_LINE_SRVC_UNIT_QTY)) %>%
+  filter(clm_pmt >0) %>%
+  as.data.frame() 
+  #get only ACO patient and assign ClaimId
+  tb2 = match_patient(tb1, alex_pat, optout, y)%>%
+    arrange(PatientId, CLM_THRU_DT, CLM_DGNS_CD, CLM_LINE_HCPCS_CD)%>%
+    group_by(PatientId) %>%
+    mutate(id = row_number()) %>%
+    mutate(ClaimId = paste(PatientId, Year, CLF, id, sep = '_')) %>%
+    select(-id) %>%
+    as.data.frame() %>%
+    inner_join(ICD_chronic %>%
+               select(ICD10CM_Code, Chronic_Indicator), by = c('CLM_DGNS_CD' ='ICD10CM_Code') ) %>%
+    inner_join(betos%>%select(HCPCS.Code, category), by = c('CLM_LINE_HCPCS_CD' = 'HCPCS.Code'))%>%
+    as.data.frame()
+ #categorize PartB HCPCS--MRI, PARTB_DRUG, Partb_proc 
+  return(tb2)
+}
+cclf5_2017_raw = get_cclf5_raw(cclf5_2017, patient1718_v2, optout2017, 2017, ICD_chronic, betoscode)
+cclf5_2018_raw = get_cclf5_raw(cclf5_2018, patient1718_v2, optout2018, 2018, ICD_chronic, betoscode)
+
+```
+
+```{r}
+write.csv(cclf5_2017,"C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\cclf5_2017_raw.csv", row.names = FALSE )
+write.csv(cclf5_2018,"C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\cclf5_2018_raw.csv", row.names = FALSE )
+```
+cclf6
+```{r}
+cclf6_2017 = sqlQuery(qvhchannel, "with cclf6 as (
+select distinct CUR_CLM_UNIQ_ID,CLM_LINE_NUM, BENE_HIC_NUM
+      ,BENE_EQTBL_BIC_HICN_NUM, CLM_ADJSMT_TYPE_CD, case when CLM_ADJSMT_TYPE_CD = '1' then
+case when CLM_LINE_PRFNL_NCH_PMT_AMT> 0 then -CLM_LINE_PRFNL_NCH_PMT_AMT*1.02
+	else -CLM_LINE_PRFNL_NCH_PMT_AMT end
+      else
+case when CLM_LINE_PRFNL_NCH_PMT_AMT>0 then CLM_LINE_PRFNL_NCH_PMT_AMT*1.02
+ else CLM_LINE_PRFNL_NCH_PMT_AMT end end as CLM_PMT_AMT, month(clm_line_thru_dt) as MONTH, 'cclf6' as CLF,
+clm_line_thru_dt as CLM_THRU_DT,  CLM_EFCTV_DT as CLM_IDR_LD_DT, [CLM_TYPE_CD], [CLM_POS_CD],CLM_LINE_HCPCS_CD
+      from
+     CCLF6_PartBDMEFile
+         where clm_carr_pmt_dnl_cd not in ('0','D','Y') and clm_prcsg_ind_cd  in ('A','R','S')
+        and year(clm_thru_dt) = 2017 AND DATEDIFF(day, CLM_THRU_DT, CLM_EFCTV_DT) <=90
+		)
+select BENE_HIC_NUM,BENE_EQTBL_BIC_HICN_NUM,MONTH,CLF,CLM_THRU_DT,[CLM_TYPE_CD], [CLM_POS_CD],CLM_LINE_HCPCS_CD,
+sum(clm_pmt_amt) as clm_pmt
+from cclf6 
+group by BENE_HIC_NUM,BENE_EQTBL_BIC_HICN_NUM,MONTH,CLF,CLM_THRU_DT,[CLM_TYPE_CD], [CLM_POS_CD],CLM_LINE_HCPCS_CD
+having sum(clm_pmt_amt)>0",stringsAsFactors = FALSE)
+
+j = sapply(cclf6_2017, is.character) # remove all leading/tailing whitespace
+cclf6_2017[j] <- lapply(cclf6_2017[j], trimws, which = 'both')
+
+cclf6_2018 = sqlQuery(qvhchannel, "with cclf6 as (
+select distinct CUR_CLM_UNIQ_ID,CLM_LINE_NUM, BENE_HIC_NUM
+      ,BENE_EQTBL_BIC_HICN_NUM, CLM_ADJSMT_TYPE_CD, case when CLM_ADJSMT_TYPE_CD = '1' then
+case when CLM_LINE_PRFNL_NCH_PMT_AMT> 0 then -CLM_LINE_PRFNL_NCH_PMT_AMT*1.02
+	else -CLM_LINE_PRFNL_NCH_PMT_AMT end
+      else
+case when CLM_LINE_PRFNL_NCH_PMT_AMT>0 then CLM_LINE_PRFNL_NCH_PMT_AMT*1.02
+ else CLM_LINE_PRFNL_NCH_PMT_AMT end end as CLM_PMT_AMT, month(clm_line_thru_dt) as MONTH, 'cclf6' as CLF,
+clm_line_thru_dt as CLM_THRU_DT,  CLM_EFCTV_DT as CLM_IDR_LD_DT, [CLM_TYPE_CD], [CLM_POS_CD],CLM_LINE_HCPCS_CD
+      from
+     CCLF6_PartBDMEFile
+         where clm_carr_pmt_dnl_cd not in ('0','D','Y') and clm_prcsg_ind_cd  in ('A','R','S')
+        and year(clm_thru_dt) = 2018 AND DATEDIFF(day, CLM_THRU_DT, CLM_EFCTV_DT) <=90
+		)
+select BENE_HIC_NUM,BENE_EQTBL_BIC_HICN_NUM,MONTH,CLF,CLM_THRU_DT,[CLM_TYPE_CD], [CLM_POS_CD],CLM_LINE_HCPCS_CD,
+sum(clm_pmt_amt) as clm_pmt
+from cclf6 
+group by BENE_HIC_NUM,BENE_EQTBL_BIC_HICN_NUM,MONTH,CLF,CLM_THRU_DT,[CLM_TYPE_CD], [CLM_POS_CD],CLM_LINE_HCPCS_CD
+having sum(clm_pmt_amt)>0",stringsAsFactors = FALSE)
+
+j = sapply(cclf6_2018, is.character) # remove all leading/tailing whitespace
+cclf6_2018[j] <- lapply(cclf6_2018[j], trimws, which = 'both')
+```
+get cclf6 raw
+```{r}
+get_cclf6_raw <- function(tb, alex_pat, optout, y){
+  tb = match_patient(tb, alex_pat, optout, y)%>%
+    arrange(PatientId, CLM_THRU_DT, CLM_LINE_HCPCS_CD)%>%
+    group_by(PatientId) %>%
+    mutate(id = row_number()) %>%
+    mutate(ClaimId = paste(PatientId, Year, CLF, id, sep = '_')) %>%
+    select(-id) %>%
+    as.data.frame()
+  return(tb)
+    
+}
+cclf6_2017_raw = get_cclf6_raw(cclf6_2017, patient1718_v2, optout2017, 2017)
+cclf6_2018_raw = get_cclf6_raw(cclf6_2018, patient1718_v2, optout2018,  2018)
+
+```
+```{r}
+write.csv(cclf6_2017,"C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\cclf6_2017_raw.csv", row.names = FALSE )
+write.csv(cclf6_2018,"C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\cclf6_2018_raw.csv", row.names = FALSE )
+```
+```{r}
+cclf1_2017_raw = cclf1_2017_raw %>%
+  group_by(PatientId) %>%
+  mutate(depression_flag = ifelse(PRNCPL_DGNS_CD %like% '^F33', 1,0 )) 
+
+```
+cclf7
+Aggregation in patient level
+1.cclf1 aggregation function
+```{r}
+get_cclf1_agg <- function(tb2){ 
+#get some measures for cclf1 in patient level
+ tb3 = tb2 %>%
+   replace(is.na(.), 0) %>%
+   mutate(depression_flag = ifelse(PRNCPL_DGNS_CD %like% '^F33', 1, 0)) %>%
+   group_by(PatientId) %>%
+   summarise(cnt_hha_visit = n_distinct(CLM_THRU_DT[CLM_TYPE_CD ==10]),
+            cnt_inp_visit = n_distinct(CLM_THRU_DT[CLM_TYPE_CD ==60]),
+            cnt_snf_visit = n_distinct(CLM_THRU_DT[CLM_TYPE_CD == 20|CLM_TYPE_CD == 30]),
+            cnt_shortstay = sum(StayDate<2&CLM_TYPE_CD ==60), 
+            cnt_otherstay = sum(StayDate>=2&CLM_TYPE_CD ==60),
+            cnt_visit1 = n_distinct(ClaimId),
+            cnt_clm_type1 = n_distinct(CLM_TYPE_CD),
+            cnt_diag_cd1 = n_distinct(PRNCPL_DGNS_CD),
+            cnt_admtg_diag = n_distinct(ADMTG_DGNS_CD),
+            cnt_admsn_type = n_distinct(CLM_ADMSN_TYPE_CD),
+            cnt_chronic1 = n_distinct(PRNCPL_DGNS_CD[Chronic_Indicator == 1]),
+            cnt_ed = sum(Cnt_ed),
+            cnt_snf_readm = sum(SNF_readm_cnt, rm.na = TRUE),
+            cnt_inp_readm = sum(Inp_readm_cnt, rm.na = TRUE),
+            total_stay = sum(StayDate),
+            depression_1 = n_distinct(PRNCPL_DGNS_CD[PRNCPL_DGNS_CD %like% '^F33']),
+            inp_cost = sum(clm_pmt[CLM_TYPE_CD ==60]),
+            hha_cost = sum(clm_pmt[CLM_TYPE_CD ==10]),
+            snf_cost = sum(clm_pmt[CLM_TYPE_CD == 20|CLM_TYPE_CD == 30]),
+            shorstay_cost = sum(clm_pmt[StayDate<2&CLM_TYPE_CD ==60]),
+            otherstay_cost = sum(clm_pmt[StayDate>=2&CLM_TYPE_CD ==60]),
+            total_cost1 = sum(clm_pmt)
+            )
+ return(tb3)
+}
+#for all 2018q4 assigned patients, get their 2017 and 2018 cclfs seperately.
+cclf1_m2017 = get_cclf1_agg(cclf1_2017_raw)
+cclf1_m2018 = get_cclf1_agg(cclf1_2018_raw)
+```
+2. cclf5 aggregation
+```{r}
+get_cclf5_agg <- function(tb2){
+ tb3 = tb2%>%
+   mutate(awv_flag = ifelse(CLM_LINE_HCPCS_CD %in% c('G0438','G0439','G0468','G0402'),1,0),
+          depression = ifelse(CLM_DGNS_CD %like% '^F33',1,0)) %>%
+  group_by(PatientId) %>%
+  summarise(cnt_visit2 = n_distinct(CLM_THRU_DT),
+            cnt_service2 = sum(clm_srv_qty),
+            cnt_clm_pos2 = n_distinct(CLM_POS_CD),
+            cnt_diag2 = n_distinct(CLM_DGNS_CD),
+            cnt_chronic2 = n_distinct(CLM_DGNS_CD[Chronic_Indicator == 1]),
+            cnt_bproc = n_distinct(ClaimId[category =='Part B Procedure']),
+            cnt_bdrug = n_distinct(ClaimId[category =='Part B Drugs']),
+            cnt_mri = n_distinct(ClaimId[category =='MRI']),
+            awv_done = ifelse(sum(awv_flag)<= 0, 0,1),
+            depression_5 = ifelse(sum(depression)<=0, 0, 1),
+            cnt_em = n_distinct(ClaimId[category =='Evaluation and Management']),
+            bproc_cost = sum(clm_pmt[category =='Part B Procedure']), 
+            bdrug_cost = sum(clm_pmt[category =='Part B Drugs']),
+            mri_cost =sum(clm_pmt[category =='MRI']) ,
+            total_cost2 = sum(clm_pmt)
+            )
+  
+  return(tb3) 
+  
+}
+cclf5_m2017 = get_cclf5_agg(cclf5_2017_raw)
+cclf5_m2018 = get_cclf5_agg(cclf5_2018_raw)
+```
+3. cclf6 aggregation
+```{r}
+get_cclf6_agg <- function(tb3){
+  tb4 = tb3 %>%
+    group_by(PatientId) %>%
+    summarise(cnt_visit3 = n_distinct(CLM_THRU_DT),
+             cnt_clm_pos3 = n_distinct(CLM_POS_CD),
+             cnt_procedure3 = n_distinct(CLM_LINE_HCPCS_CD),
+             total_cost3 = sum(clm_pmt)
+            )
+  return(tb4)
+}
+cclf6_m2017 = get_cclf6_agg(cclf6_2017_raw)
+cclf6_m2018 = get_cclf6_agg(cclf6_2018_raw)
+```
+4.combine cclf1~cclf6_m for 2017
+```{r}
+combine_model_fun <- function(pattb, c1, c5, c6){
+  tb = pattb %>%
+    left_join(c1, by = 'PatientId') %>%
+    left_join(c5, by = 'PatientId') %>%
+    left_join(c6, by = 'PatientId') %>%
+    group_by(PatientId) %>%
+    mutate(depression_flag = ifelse(depression_1 + depression_5>=1, 1,0),
+           total_cost = sum(total_cost1, total_cost2, total_cost3, na.rm = TRUE))%>%
+    select(-c(depression_1, depression_5))%>%
+    arrange(PatientId)%>%
+    as.data.frame() %>%    #there are NA, convert to 0
+    replace(is.na(.), 0)
+  return(tb)
+}
+
+# t2017 = combine_model_fun(final17_pat, cclf1_m2017, cclf5_m2017,cclf6_m2017)
+# write.csv(t2017, "C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\2017final_modeldatav4.csv", row.names = FALSE)
+# 
+# t2018 = combine_model_fun(final18_pat, cclf1_m2018, cclf5_m2018,cclf6_m2018) 
+# ##### give labels of 2018 patients
+# t2018l = t2018 %>%
+#   mutate(Label = ifelse(total_cost >=quantile(total_cost, 0.9), 1, 0)) %>%
+#   select(-total_cost)
+# write.csv(t2018, "C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\2018final_modeldatav4.csv", row.names = FALSE)
+# write.csv(t2018l, "C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\2018final_modeldata_labelv4.csv", row.names = FALSE)
+```
+
+this is final17/18_pat2
+```{r}
+t2017_v2 = combine_model_fun(final17_pat2, cclf1_m2017, cclf5_m2017,cclf6_m2017)
+t2018_v2 = combine_model_fun(final18_pat2, cclf1_m2018, cclf5_m2018,cclf6_m2018)
+t2018l_v2 = t2018_v2 %>%
+  mutate(Label = ifelse(total_cost >=quantile(total_cost, 0.9), 1, 0)) %>%
+  select(-total_cost)
+#check the threshold of 'high-cost'
+print(paste('Cut-down threshold of top 10% High-cost patient in 2017:', quantile(t2017_v2$total_cost, 0.9)))
+print(paste('Average cost per patient in 2017:', mean(t2017_v2$total_cost)))
+print(paste('Cut-down threshold of top 10% High-cost patient in 2018:', quantile(t2018_v2$total_cost, 0.9)))
+print(paste('Average cost per patient in 2018:', mean(t2018_v2$total_cost)))
+
+```
+The overall model data 
+```{r}
+new_table_v2 = t2017_v2%>%
+  inner_join(t2018l_v2%>%select(PatientId,Label ), by = 'PatientId') %>%
+  as.data.frame()
+rownames(new_table_v2) = new_table_v2$PatientId
+new_table1_v2 = new_table_v2%>%
+  filter(HCCRaf != 'NaN') %>%
+  mutate(Sex = as.numeric(ifelse(Sex == 'Male',1,0)), 
+         MajorEnrollType = as.numeric(ifelse(MajorEnrollType =='ESRD', 1,
+                                  ifelse(MajorEnrollType =='Disabled', 2,
+                                         ifelse(MajorEnrollType =='AgedDual', 3,4)))))
+write.csv(new_table1_v2,"C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\model_table0827.csv", row.names = FALSE)
+```
+Add depression?
+```{r}
+
+
+```
+
+########################################## Tableau ################################################
+
+
+Since we have 2017,2018 aggregation data, we can combine raw data with flag label(from t2017, t2018)
+```{r}
+pat_1718flag = t2017 %>%
+  mutate(Year = 2017,
+         flag = ifelse(total_cost >=quantile(total_cost, 0.9), 'High',
+                           ifelse(total_cost < quantile(total_cost, 0.9) & total_cost>= quantile(total_cost, 0.6), 'More Likely',
+                                  ifelse(total_cost < quantile(total_cost, 0.6) & total_cost >= quantile(total_cost, 0.4), 'Less Likely','Unlikely'))))%>%
+  rbind(t2018 %>%
+          mutate(Year = 2018,
+            flag = ifelse(total_cost >=quantile(total_cost, 0.9), 'High',
+                           ifelse(total_cost < quantile(total_cost, 0.9) & total_cost >= quantile(total_cost, 0.6), 'More Likely',
+                                  ifelse(total_cost < quantile(total_cost, 0.6) & total_cost >= quantile(total_cost, 0.4), 'Less Likely','Unlikely'))))) %>%
+  as.data.frame() %>%
+  select(c(PatientId, Year, flag))
+```
+```{r}
+final17_pat2 %>%
+  inner_join(cclf1_2017_raw %>%
+               rename(CLM_DGNS_CD = PRNCPL_DGNS_CD) %>%
+               bind_rows(cclf5_2017_raw) %>%
+               bind_rows(cclf6_2017_raw) %>%
+               distinct(),
+             by = 'PatientId')
+```
+Combine all pat_table, cclf1, 5, 6 raw 
+```{r}
+combine_tableau_func <- function(pattb, c1_raw, c5_raw,c6_raw, css_dx_tb){
+  pattb %>%
+    inner_join(
+      c1_raw %>%
+        rename(CLM_DGNS_CD = PRNCPL_DGNS_CD) %>%
+        bind_rows(c5_raw) %>%
+        bind_rows(c6_raw) %>%
+        distinct(), 
+      by = 'PatientId') %>%
+    left_join(css_dx , by = c('CLM_DGNS_CD' = 'ICD10CM_Code'))
+    
+}
+total17_v2 = combine_tableau_func(final17_pat2, cclf1_2017_raw, cclf5_2017_raw,cclf6_2017_raw, css_dx)
+# write.csv(total17, "C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\final17.csv" , row.names = FALSE
+total18_v2 = combine_tableau_func(final18_pat2, cclf1_2018_raw, cclf5_2018_raw,cclf6_2018_raw, css_dx)
+```
+```{r}
+practiceprovider = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\TF\\providerpractice_SQL.csv', header = TRUE, stringsAsFactors = FALSE)
+# Combine as full
+full1718_v2 = total17_v2 %>%
+  rbind(total18_v2)  %>%
+  inner_join(practiceprovider %>%select(-PracticeGroupNPI), by = c('PCPTin' = 'PracticeTIN', 'PCPNPI' = 'ProviderNPI'))%>%
+  inner_join(pat_1718flag, by = c('PatientId', 'Year')) %>%
+  as.data.frame()
+ 
+write.csv(full1718_v2, "C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ACO\\HighCostPatient\\final_full1718.csv" , row.names = FALSE)
+
+```
+release memory
+```{r}
+rm( cclf1_2017,cclf5_2017, cclf6_2017, final17,cclf1_2018,cclf5_2018, cclf6_2018, final18)
+rm(cms_stands, ICD_chronic, optout2017, optout2018, optout)
+gc()
+
+```
+assign HCPCS code category to betos code
+assign DiganosisCode category by css_dx_xw
+```{r}
+css_dx = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\ProcessingCode\\ccs_dx_icd10cm_2019_01.csv', header = TRUE, stringsAsFactors = FALSE)
+```
+
+```{r}
+#scale_pos_weight-- deal with imbalanced data: #+/#-
+sqrt(nrow(new_table[new_table$Label==0, ])/nrow(new_table[new_table$Label==1, ]))
+
+
+
+
+```
+

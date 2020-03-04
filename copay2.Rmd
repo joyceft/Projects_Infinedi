@@ -1,0 +1,476 @@
+---
+title: "copay2"
+author: "TF"
+date: "1/8/2020"
+output: html_document
+---
+
+```{r echo = FALSE}
+##this file's functions are all final ones, the test and detailed ones are in all_sample1.rmd
+rm(list = ls())
+.rs.restartR()
+gc()
+memory.size()
+```
+```{r}
+library('RODBC')
+library('sqldf')
+library('dplyr')
+library('rlang')
+library('tibble')
+library('RSQLS')
+library('lubridate')
+library(data.table)
+library(stringr)
+library(bit64)
+library(installr)
+erachannel = odbcConnect('ERAdatabase')
+clmprochannel = odbcConnect('ClaimProcessing_Database')
+webanalyticsDEVchannel <- odbcConnect("WebAnalytics_DEV")
+webanalyticsAAGchannel <- odbcConnect("WebAnalytics_AAG")
+```
+```{r}
+co_list = sqlQuery(erachannel, "SELECT TOP 1000 EraId, Contents FROM [ERA].[dbo].[tblQEra]
+  WHERE (CONTENTS like '%CAS*CO*3*%' or CONTENTS like '%CAS*PR*3*%' or CONTENTS like '%CAS*OA*3*%' or CONTENTS like '%CAS*PI*3*%') and year(messagetime) = 2019", stringsAsFactors = FALSE)
+co = co_list$Contents[2]
+```
+
+#there are 2 parts for this parsing purpose, first is find the payer+payee information, second is find the claim information
+```{r}
+header = c('PayerName','PayerState', 'PayeeName', 'PracticeNpi', 'PayeeState', 'CLPid', 'ICN', 'ProviderName', 'ProviderNpi','SrvProcCode', 'SrvAllowed', 'CASCO', 'CASPR', 'CASPI', 'CASOA')
+
+
+segsep = paste0('\\',substr(co,4,4)) #*
+possep = paste0('\\', substr(co,106,106)) #~
+#payerpayee section
+payerstart = as.integer64(gregexpr(paste0('N1', segsep), co)[[1]][1])
+payeestart = as.integer64(gregexpr(paste0('N1', segsep), co)[[1]][2])
+co_end = as.integer64(nchar(co))
+lx = as.integer64(gregexpr(paste0('CLP', segsep), co)[[1]][1])
+payersub = substr(co, payerstart, payeestart)
+payeesub = substr(co, payeestart, lx)
+###############payer
+
+  payernamepattern = paste0('(?<=', segsep, 'PR', segsep, ').+?(?=', possep, 'N3)')
+  payername = unlist(str_extract_all(payersub,payernamepattern))
+if (grepl('N4', payersub)){
+  payeraddpattern = paste0('(?<=N4', segsep, ').+?(?=', possep, 'PER)')
+  payercity = unlist(strsplit(str_extract_all(payersub, payeraddpattern)[[1]][1], segsep))[1]
+  payerstate = unlist(strsplit(str_extract_all(payersub, payeraddpattern)[[1]][1], segsep))[2]
+}else{
+  payercity<-NA
+  payerstate <-NA
+}
+#############payee
+payeenamepattern = paste0('(?<=PE', segsep, ').+?(?=', possep, ')')
+payeename = unlist(strsplit(str_extract_all(payeesub,payeenamepattern)[[1]][1], segsep))[1]
+payeenpi =unlist(strsplit(str_extract_all(payeesub,payeenamepattern)[[1]][1], segsep))[3] 
+if (grepl('N4', payeesub)){
+  payeeaddpattern = paste0('(?<=N4', segsep, ').+?(?=', possep, 'REF)')
+  payeecity = unlist(strsplit(str_extract_all(payeesub, payeeaddpattern)[[1]][1], segsep))[1]
+  payeestate = unlist(strsplit(str_extract_all(v, payeeaddpattern)[[1]][1], segsep))[2]
+}else{
+  payeecity = NA
+  payeestate = NA
+}
+#gregexpr( 'CLP', co)
+#substr(co, findo, len)
+```
+## Claim Information
+```{r}
+co3p = "CAS\\*CO\\*3"
+pr3p = "CAS\\*OA\\*3"
+oa3p = "CAS\\*PI\\*3"
+pi3p = "CAS\\*PR\\*3"
+clp_list = gregexpr('CLP', co, perl = TRUE)[[1]]
+cnt_clp = str_count(co, 'CLP')
+for (i in 1:cnt_clp){
+  if (i< cnt_clp ){
+    sub = substr(co, clp_list[i], clp_list[i+1]-1)
+  }else{
+    sub = substr(co, clp_list[i], co_end)
+  }
+  #parse each
+  sub_end = as.integer64(nchar(sub))
+  icn = strsplit(sub, segsep,perl = TRUE)[[1]][8]
+  cnt_srv = str_count('SVC')
+  srv_list = gregexpr('SVC', sub, perl = TRUE)[[1]]
+  #co3 = grepl(co3p, sub)
+  for(j in 1: cnt_srv){
+    if(j<cnt_srv){
+      srv_sub = substr(sub, srv_list[j], srv_list[i+1]-1)
+    }else{
+      srv_sub = substr(sub, srv_list[j], sub_end)
+    }
+    proccode = strsplit()
+  }
+
+  
+}
+```
+
+
+```{r}
+instr <- function(str1,str2,startpos=1,n=1){
+  aa=unlist(strsplit(substring(str1,startpos),str2))
+  if(length(aa) < n+1 ) return(0);
+  return(sum(nchar(aa[1:n])) + startpos+(n-1)*nchar(str2) )
+}
+like1="'%CAS*CO*3*%'"
+like2="'%CAS*OA*3*%'"
+like3="'%CAS*PI*3*%'"
+like4="'%CAS*PR*3*%'"
+filingcodelist = list()
+icnlist = list()
+patientcontrolnumberlist= list()
+claimstatuscodelist = list()
+proccodelist= list()
+Group_codelist= list()
+Copaylist= list()
+ClaimAdjReasonlist= list()
+AmtQuallist=list()
+messagetimelist = list()
+eraidlist=list()
+payerstatelist=list()
+payernamelist=list()
+payeenamelist=list()
+payeestatelist=list()
+payeenpilist=list()
+allowedlist = list()
+RenderingNPIlist = list()
+index = 1
+#scannedicnlist = list()
+#repricelist = list()
+eraid=7120941
+#end 7274614
+while (eraid <=7274614){
+  #print('eraid')
+  #print(eraid)
+  start = eraid
+  end = start + 100000
+  
+  eras = sqlQuery(erachannel, sprintf("SELECT * from ERA.dbo.TBLQera where status != 4 
+                                      and eraid between (%s) and (%s)"
+                                      ,start,end), stringsAsFactors = FALSE)
+  df=eras
+  library(stringr)
+  ##nrow(uniqdf))
+  row=1
+
+  while (row <=nrow(df)) {
+    #print('row')
+    #print(row)
+    print(df$EraId[row])
+    content = df$Contents[row]
+    count = str_count(content, "CAS\\*PR\\*3\\*")+str_count(content, "CAS\\*OA\\*3\\*")+str_count(content, "CAS\\*CO\\*3\\*")+str_count(content, "CAS\\*PI\\*3\\*")
+    if (count==0){
+      row=row+1
+      next
+    }
+    found_copay=0
+    claimcount = str_count(content,"CLP")
+    len = nchar(content)
+    if (len==65534){
+      row=row+1
+      next
+    }
+    pos = 0
+    segsep = substr(content,106,106)
+    possep = substr(content,4,4)
+    #TRN = instr(content, 'TRN')
+    #trn_loop = substr(content,TRN,len)
+    
+    
+    segsep1 = paste0('\\',substr(content,4,4)) #*
+    possep1 = paste0('\\', substr(content,106,106)) #~
+    #payerpayee section
+    payerstart = as.integer64(gregexpr(paste0('N1', segsep1), content)[[1]][1])
+    payeestart = as.integer64(gregexpr(paste0('N1', segsep1), content)[[1]][2])
+    #content_end = as.integer64(nchar(content))
+    lx = as.integer64(gregexpr(paste0('CLP', segsep1), content)[[1]][1])
+    payersub = substr(content, payerstart, payeestart)
+    payeesub = substr(content, payeestart, lx)
+    ###############payer
+    
+    payernamepattern = paste0('(?<=', segsep1, 'PR', segsep1, ').+?(?=', possep1, 'N3)')
+    payername = unlist(str_extract_all(payersub,payernamepattern))
+    if (grepl('N4', payersub)){
+      payeraddpattern = paste0('(?<=N4', segsep1, ').+?(?=', possep1, 'PER)')
+      payercity = unlist(strsplit(str_extract_all(payersub, payeraddpattern)[[1]][1], segsep1))[1]
+      payerstate = unlist(strsplit(str_extract_all(payersub, payeraddpattern)[[1]][1], segsep1))[2]
+    }else{
+      payercity<-'NA'
+      payerstate <-'NA'
+    }
+    #############payee
+    payeenamepattern = paste0('(?<=PE', segsep1, ').+?(?=', possep1, ')')
+    payeename = unlist(strsplit(str_extract_all(payeesub,payeenamepattern)[[1]][1], segsep1))[1]
+    payeenpi =unlist(strsplit(str_extract_all(payeesub,payeenamepattern)[[1]][1], segsep1))[3] 
+    if (grepl('N4', payeesub)){
+      payeeaddpattern = paste0('(?<=N4', segsep1, ').+?(?=', possep1, 'REF)')
+      payeecity = unlist(strsplit(str_extract_all(payeesub, payeeaddpattern)[[1]][1], segsep1))[1]
+      payeestate = unlist(strsplit(str_extract_all(payeesub, payeeaddpattern)[[1]][1], segsep1))[2]
+    }else{
+      payeecity = 'NA'
+      payeestate = 'NA'
+    }
+    
+    clp_loc_list = gregexpr("CLP",content)
+    
+    
+    claim=1
+    if(clp_loc_list[[1]][claim] == -1){
+      claim = claim+1
+      filingcode = NA
+      ICN = NA
+      patientcontrolnumber = NA
+      claimstatuscode = NA
+    }
+    while (claim <= claimcount){
+      #print('claim')
+      #print(claim)
+      #sub = substr(content,pos,len)
+      #clp_loc_list = gregexpr(content,"CLP")
+      #clp = instr(sub, 'CLP')
+      if (claim+1>claimcount){
+        clp_loop = substr(content,clp_loc_list[[1]][claim],len-1)
+      } else{
+        clp_loop = substr(content,clp_loc_list[[1]][claim],clp_loc_list[[1]][claim+1]-1)
+      }
+      #dtm_list = gregexpr("DTM",clp_loop)
+      #for (dtm in 1:len(dtm_list))
+      #dtm_loop  = substr(clp_loop,dtm,len(clp_loop))
+      #reprice = instr(dtm_loop,paste(possep,'9A',sep=''))
+      filingcode = strsplit(clp_loop,possep,fixed=TRUE)[[1]][7]
+      ICN = strsplit(clp_loop,possep,fixed=TRUE)[[1]][8]
+      patientcontrolnumber = strsplit(clp_loop,possep,fixed=TRUE)[[1]][2]
+      claimstatuscode = strsplit(clp_loop,possep,fixed=TRUE)[[1]][3]
+      #ClaimFrequencyCode = strsplit(clp_loop,possep,fixed=TRUE)[[1]][10]
+      #DRG=strsplit(clp_loop,possep,fixed=TRUE)[[1]][12]
+      #=pos+find+1
+      #if (reprice>0) {reprice=1}
+      #nextclaimpos = instr(substr(clp_loop,2,len),'CLP')
+      
+      SVC_loc_list = gregexpr("SVC",clp_loop)
+      SVC=1
+      
+     NM1_loc_list = gregexpr("NM1",clp_loop)
+     RenderingNPI=NA
+      NM1=1
+      if(NM1_loc_list[[1]][NM1] == -1){
+        NM1 =NM1+1 
+        RenderingNPI=NA
+      }
+      while (NM1 <=length(NM1_loc_list[[1]])){
+        #print('AMT')
+        #print(AMT)
+        if (NM1+1>length(NM1_loc_list[[1]])){
+          
+          NM1_loop = substr(clp_loop,NM1_loc_list[[1]][NM1],nchar(clp_loop))
+          findlist = gregexpr(segsep,NM1_loop)
+          NM1_loop_sub = substr(NM1_loop,0,findlist[[1]][1]-1)
+        } else{
+          NM1_loop = substr(clp_loop,NM1_loc_list[[1]][NM1],NM1_loc_list[[1]][NM1+1])
+          findlist = gregexpr(segsep,NM1_loop)
+          NM1_loop_sub = substr(NM1_loop,0,findlist[[1]][1]-1)
+        }
+        NM101= strsplit(NM1_loop,possep,fixed=TRUE)[[1]][2]
+        if (is.na(NM101) ){NM101=404}
+        if (NM101 == 82){
+          RenderingNPI=strsplit(NM1_loop_sub,possep,fixed=TRUE)[[1]][10]
+          #AMT=length(AMT_loc_list)+1
+        }
+        NM1=NM1+1
+      }
+      
+      if(SVC_loc_list[[1]][SVC] == -1){
+        SVC = SVC+1 
+        proccode = NA
+      }
+      while (SVC<= length(SVC_loc_list[[1]])){
+        #print('SVC')
+        #print(SVC)
+        if (SVC+1>length(SVC_loc_list[[1]])){
+          SVC_loop = substr(clp_loop,SVC_loc_list[[1]][SVC],nchar(clp_loop))
+        } else{
+          SVC_loop = substr(clp_loop,SVC_loc_list[[1]][SVC],SVC_loc_list[[1]][SVC+1])
+        }
+        proccode = strsplit(SVC_loop,possep,fixed=TRUE)[[1]][2]
+        CAS_loc_list = gregexpr("CAS",SVC_loop)
+        AMT_loc_list = gregexpr("AMT",SVC_loop)
+        AMT=1
+        if(AMT_loc_list[[1]][AMT] == -1){
+          AMT =AMT+1 
+          Allowed=NA
+          AmtQual = NA
+        }
+        while (AMT <=length(AMT_loc_list[[1]])){
+          #print('AMT')
+          #print(AMT)
+          if (AMT+1>length(AMT_loc_list[[1]])){
+
+            AMT_loop = substr(SVC_loop,AMT_loc_list[[1]][AMT],nchar(SVC_loop))
+            findlist = gregexpr(segsep,AMT_loop)
+            amt_loop_sub = substr(AMT_loop,0,findlist[[1]][1]-1)
+          } else{
+            AMT_loop = substr(SVC_loop,AMT_loc_list[[1]][AMT],AMT_loc_list[[1]][AMT+1])
+            findlist = gregexpr(segsep,AMT_loop)
+            amt_loop_sub = substr(AMT_loop,0,findlist[[1]][1]-1)
+          }
+          AmtQual= strsplit(AMT_loop,possep,fixed=TRUE)[[1]][2]
+          if (AmtQual == 'B6'){
+            Allowed=strsplit(amt_loop_sub,possep,fixed=TRUE)[[1]][3]
+            #AMT=length(AMT_loc_list)+1
+          }
+          AMT=AMT+1
+        }
+        REF_loc_list = gregexpr("REF",SVC_loop)
+        REF=1
+        if(REF_loc_list[[1]][REF] == -1){
+           REF =REF+1 
+           RenderingNPI = NA
+        }
+        while (REF <=length(REF_loc_list[[1]])){
+          #print('AMT')
+          #print(AMT)
+          if (REF+1>length(REF_loc_list[[1]])){
+            
+            REF_loop = substr(SVC_loop,REF_loc_list[[1]][REF],nchar(SVC_loop))
+            findlist = gregexpr(segsep,REF_loop)
+            REF_loop_sub = substr(REF_loop,0,findlist[[1]][1]-1)
+          } else{
+            REF_loop = substr(SVC_loop,REF_loc_list[[1]][REF],REF_loc_list[[1]][REF+1])
+            findlist = gregexpr(segsep,REF_loop)
+            REF_loop_sub = substr(REF_loop,0,findlist[[1]][1]-1)
+          }
+          REF01 = strsplit(REF_loop,possep,fixed=TRUE)[[1]][2]
+          if (REF01 == 'HPI'){
+            RenderingNPI=strsplit(REF_loop_sub,possep,fixed=TRUE)[[1]][3]
+            #AMT=length(AMT_loc_list)+1
+          }
+          REF=REF+1
+        }
+        
+        
+        
+        
+        CAS=1
+        if(CAS_loc_list[[1]][CAS] == -1){
+          CAS =CAS+1
+          Copay=NA
+          Group_code = NA
+          ClaimAdjReason = NA
+        }
+        while (CAS <=length(CAS_loc_list[[1]])){
+          #print('CAS')
+          #print(CAS)
+          if (CAS+1>length(CAS_loc_list[[1]])){
+            CAS_loop = substr(SVC_loop,CAS_loc_list[[1]][CAS],nchar(SVC_loop)-1)
+            findlist = gregexpr(segsep,CAS_loop)
+            cas_loop_sub = substr(CAS_loop,0,findlist[[1]][1]-1)
+          } else{
+            CAS_loop = substr(SVC_loop,CAS_loc_list[[1]][CAS],CAS_loc_list[[1]][CAS+1]-2)
+            findlist = gregexpr(segsep,CAS_loop)
+            cas_loop_sub = substr(CAS_loop,0,findlist[[1]][1]-1)
+          }
+          Group_code = strsplit(CAS_loop,possep,fixed=TRUE)[[1]][2]
+          ClaimAdjReason = strsplit(CAS_loop,possep,fixed=TRUE)[[1]][3]
+          if(ClaimAdjReason==3){
+            Copay = strsplit(cas_loop_sub,possep,fixed=TRUE)[[1]][4]
+            library(installr)
+            if(is.empty(payername)){payername = 'noname'}
+            filingcodelist[index] = filingcode
+            icnlist[index] = ICN
+            patientcontrolnumberlist[index]= patientcontrolnumber
+            claimstatuscodelist[index]= claimstatuscode
+            proccodelist[index]= proccode
+            Group_codelist[index]= Group_code
+            Copaylist[index]= Copay
+            ClaimAdjReasonlist[index]= ClaimAdjReason
+            AmtQuallist[index]= AmtQual
+            messagetimelist[index]=df$MessageTime[row]
+            payerstatelist[index]=payerstate
+            payernamelist[index]=payername
+            payeenamelist[index]=payeename
+            payeestatelist[index]=payeestate
+            payeenpilist[index]=payeenpi
+            eraidlist[index]=df$EraId[row]
+            allowedlist[index]=Allowed
+            RenderingNPIlist[index]=RenderingNPI
+            index = index+1
+            
+            print(c('index',index,'start',start,'end',end,'eraid',df$EraId[row]))
+            found_copay = found_copay + 1
+            if (found_copay >= count){
+              CAS=length(CAS_loc_list[[1]])+1
+              SVC = length(SVC_loc_list[[1]])+1
+              claim= claimcount+1
+              
+              
+            }
+          }
+          CAS=CAS+1
+        }
+        SVC=SVC+1
+      }
+      claim=claim+1
+    }
+    row=row+1
+  }
+  eraid=end+1
+}
+
+```
+```{r}
+lookupdf = cbind(unlist(eraidlist), unlist(payerstatelist), unlist(payernamelist),unlist(payeenamelist),unlist(payeestatelist)
+                 ,unlist(payeenpilist),unlist(icnlist),unlist(filingcodelist),unlist(patientcontrolnumberlist),unlist(claimstatuscodelist)
+                 ,unlist(proccodelist),unlist(Group_codelist),unlist(Copaylist),unlist(ClaimAdjReasonlist),unlist(AmtQuallist),unlist(allowedlist),unlist(messagetimelist), unlist(RenderingNPIlist) ) %>% as.data.frame()
+colnames(lookupdf) = c('eraid', 'payerstate', 'payername','payeename','payeestate','payeenpi','icn','filingcode'
+                       ,'patientcontrolnumber','claimstatuscode','proccode','Group_code','Copay','ClaimAdjReason','AmtQual','allowed','messagetimelist','RenderingNPI')
+
+i = sapply(lookupdf, is.factor)
+lookupdf[i] <- lapply(lookupdf[i], as.character)
+#
+lookupdf$eraid = as.numeric(lookupdf$eraid)
+lookupdf$payeenpi = as.numeric(lookupdf$payeenpi)
+lookupdf$filingcode = as.numeric(lookupdf$filingcode)
+lookupdf$Copay =as.numeric(lookupdf$Copay)
+lookupdf$ClaimAdjReason =as.numeric(lookupdf$ClaimAdjReason)
+lookupdf$allowed =as.numeric(lookupdf$allowed)
+lookupdf$RenderingNPI =as.numeric(lookupdf$RenderingNPI)
+```
+```{r}
+eraid %>%as.data.frame() %>%rbind(payerstate %>%as.data.frame())
+
+
+##finished
+getwd()
+path = getwd()
+
+library(writexl)
+write_xlsx(lookupdf, "lookupdf727.xlsx")
+
+```
+```{r}
+
+for (i in (6186987: 7259528)){
+  start = i
+  end = start+ 10000
+  print(paste(start, end))
+}
+eraid =6186987   
+while (eraid <= 7259528){
+  start = eraid
+  end = start + 1000
+  eraid=end+1
+  print(paste(start, end))
+}
+```
+
+
+```{r}
+length(unique(icnlist))
+while(aa<=4){
+  print(aa) 
+  aa = aa+1}
+```

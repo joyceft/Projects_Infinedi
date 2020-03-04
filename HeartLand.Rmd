@@ -1,0 +1,438 @@
+---
+title: "HeartLand_v1"
+author: "TF"
+date: "11/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+rm(list = ls())
+.rs.restartR()
+gc()
+memory.size()
+```
+
+```{r}
+setwd("C:\\Users\\tianyi.fang\\Documents\\Projects_Infinedi")
+# library('RODBC')
+library('sqldf')
+library('dplyr')
+library('rlang')
+#library('tibble')
+# library('RSQLS')
+# library(DBI)
+# library(RMySQL)
+library(stringr)
+#library(tidyverse)
+```
+Input the noshow data of HeartLand Patient
+```{r}
+rawnoshow = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\TACHC\\NoShow\\noshow8.csv',header = TRUE, stringsAsFactors = FALSE)
+#some cleaning steps
+rawnoshow[rawnoshow==''] = NA
+rawnoshow$per_state = toupper(rawnoshow$per_state)
+j = sapply(rawnoshow, is.character) # remove all leading/tailing whitespace
+rawnoshow[j] <- lapply(rawnoshow[j], trimws, which = 'both')
+```
+```{r}
+#do quick data understanding by Tableau
+options(scipen =999)
+length(unique(rawnoshow$PersonID)) #59769
+##how many NULL data there are?
+sapply(rawnoshow, function(x) sum(is.na(x)))
+summary(rawnoshow)
+```
+################################################## 1 ######################################################
+Impute NULL variable -- numeric
+```{r}
+#all the 1/0 flag that has NULL, which means patient does not have that measure
+rawnoshow = rawnoshow %>%
+  select(apptid,asthema_flag,Hypertension_Flag,Obesity_Flag, heart_flag,Diabetes_flag,lisinopril_flag, tramadol_flag, codeine_flag, gabapentin_flag, methylprednisolone_flag, CYCLOBENZAPRINE_flag, metformin_flag, HYDROCODONE_flag, omeprazole_flag, ATORVASTATIN_flag,trazodone_flag) %>%
+  mutate_all(funs(ifelse(is.na(.), 'Unreported', ifelse(. ==1, 'Yes',ifelse(.==0, 'No', .))))) %>%
+  inner_join(rawnoshow %>%
+               select(-c(asthema_flag,Hypertension_Flag,Obesity_Flag, heart_flag,Diabetes_flag,lisinopril_flag, tramadol_flag, codeine_flag, gabapentin_flag, methylprednisolone_flag, CYCLOBENZAPRINE_flag, metformin_flag, HYDROCODONE_flag, omeprazole_flag, ATORVASTATIN_flag, trazodone_flag)), by = 'apptid')
+```
+Get the distance between 2 location
+```{r}
+library(ggmap)
+register_google(key = 'AIzaSyAu27K8_bfejgmeB9m7Zu874INi9jypFmg')
+dist = rawnoshow %>%
+  filter(!is.na(pat_zip) &per_state == loc_state) %>%
+  select(PersonID, pat_zip,pat_address1, pat_city, per_state, loc_zipcode, loc_address1, loc_city, loc_state) %>%
+  distinct()
+dist$loc_zipcode = as.character(dist$loc_zipcode)
+############ zip code
+dist_zip = dist %>%
+  select(pat_zip, loc_zipcode) %>%
+  distinct() %>%
+  mutate(pat_zip = substr(pat_zip,1, 5),
+         loc_zipcode = substr(loc_zipcode,1, 5))
+
+dist_zip1 = dist_zip[1:10, ]
+as.data.frame(mapdist(dist_zip1$pat_zip, dist_zip1$loc_zipcode, mode = 'driving', override_limit = TRUE ))
+mapdist('76052', '76801', mode = 'driving')
+
+################ actual address
+dist$pat_adr = paste0(dist$pat_address1,', ', dist$pat_city,', ', dist$per_state, sep = '')
+dist$loc_adr = paste0(dist$loc_address1,', ', dist$loc_city,', ', dist$loc_state, sep = '')
+
+dist_adr = dist %>%
+  select(pat_adr, loc_adr ) %>%
+  distinct()
+dist_adr1 = dist_adr[1:10, ]
+as.data.frame(mapdist(dist_adr1$pat_adr, dist_adr1$loc_adr, mode = 'driving', override_limit = TRUE ))
+
+
+library(googleway)
+set_key('AIzaSyAu27K8_bfejgmeB9m7Zu874INi9jypFmg')
+google_distance(origins = '74105, USA', destinations = '74119, USA')
+
+rawnoshow %>%
+  select()
+```
+```{r}
+rawnoshow %>%
+  mutate(appt_year = str_sub(sub(' .*', '', apptdate),-4, -1)) %>%
+  group_by(appt_year) %>%
+  summarise(cnt_pat = n_distinct(PersonID))
+
+
+```
+
+```{r}
+#1. fill gender NULL
+unique(rawnoshow$genderidentity) #8
+unique(rawnoshow$sex) #F,M,O
+rawnoshow %>%
+  mutate(sex= ifelse(sex =='F', 'Female', ifelse(sex =='M', 'Male', 'Others'))) %>%
+  filter(sex != genderidentity & !is.na(genderidentity) & genderidentity %in% c('Female', 'Male'))%>%
+  select(PersonID) %>%
+  distinct() 
+#most of them are declare to specify, if it's F/M problem, use genderidentity
+#1763
+rawnoshow %>%
+  group_by(genderidentity) %>%
+  summarise(cnt = n_distinct(PersonID)
+            )
+rawnoshow = rawnoshow %>%
+  mutate(sex1 = ifelse(sex =='F', 'Female', ifelse(sex =='M', 'Male', 'Other'))) %>%
+  mutate(genderidentity1 = ifelse(is.na(genderidentity), 'Unknown', genderidentity))# 
+rawnoshow %>%
+  group_by(genderidentity1) %>%
+  summarise(n = n_distinct(PersonID))
+#Done
+```
+```{r}
+rawnoshow %>%
+  group_by(race) %>%
+  summarise(cnt = n_distinct(PersonID))
+```
+```{r}
+#2. language
+unique(rawnoshow$language)
+unique(rawnoshow$ethnicity)
+rawnoshow %>%
+  filter(is.na(language)) %>%
+  select(PersonID, ethnicity) %>%
+  group_by(ethnicity) %>%
+  summarise(cnt = n_distinct(PersonID))
+#if Hispanic/Latino fill as Spanish, if Non-Hispanic/Latino fill English, if Unreported fill Others
+rawnoshow = rawnoshow %>%
+  mutate(language1 = ifelse(is.na(language) & ethnicity == 'Hispanic/Latino','Spanish', 
+                           ifelse(is.na(language) &ethnicity == 'Non-Hispanic/Latino', 'English',
+                                  ifelse(is.na(language) &ethnicity == 'Unreported/Refused to Report Ethnicity', 'Declined to specify', language)))) %>%
+  mutate(language1 = ifelse(language1 == 'E', 'English', ifelse(language1 == 'Sp', 'Spanish', language1))) 
+rawnoshow%>%
+  group_by(language1) %>%
+  summarise(cnt = n_distinct(PersonID))
+rawnoshow = rawnoshow %>%
+  mutate(language2 = ifelse(language1 == 'English', 'English', 
+                            ifelse(language1 == 'Spanish', 'Spanish', 'Other')))
+
+#Done
+```
+
+```{r}
+#homeless
+rawnoshow %>%
+  group_by(homeless) %>%
+  summarise(cnt = n_distinct(PersonID))
+
+rawnoshow = rawnoshow %>%
+  mutate(homeless1 = ifelse(homeless %in% c('Not Homeless', 'Doubling Up', 'No'), 'No', 
+                           ifelse(homeless %in% c('Shelter', 'Street', 'Transitional', 'Yes'), 'Yes', 'Unreported'))) 
+rawnoshow %>%
+  group_by(homeless1) %>%
+  summarise(cnt = n_distinct(PersonID))
+
+```
+
+```{r}
+#veteran
+rawnoshow %>%
+  group_by(veteran) %>%
+  summarise(n = n_distinct(PersonID))
+rawnoshow = rawnoshow %>%
+  mutate(veteran1 = ifelse(is.na(veteran), 'U', veteran)) 
+rawnoshow %>%
+  group_by(veteran1) %>%
+  summarise(cnt = n_distinct(PersonID))
+```
+```{r}
+#migrant status
+rawnoshow %>%
+  group_by(migrantstatus) %>%
+  summarise(cnt = n_distinct(PersonID))
+
+rawnoshow = rawnoshow %>%
+  mutate(migrantstatus1 = ifelse(migrantstatus %in% c('Seasonal', 'Migrant'), 'Y',
+                                ifelse(is.na(migrantstatus)|migrantstatus == 'Needs To Be Updated', 'U', 'N'))) 
+rawnoshow%>%
+  group_by(migrantstatus1) %>%
+  summarise(cnt = n_distinct(PersonID))
+```
+```{r}
+#sexorientation
+rawnoshow %>%
+  group_by(sexualorientation) %>%
+  summarise(cnt = n_distinct(PersonID))
+rawnoshow = rawnoshow %>%
+  mutate(sexualorientation1 = ifelse(sexualorientation %in% c('Straight or heterosexual', 'Straight Or Heterosexual'), 'Heterosexual',
+                                                             ifelse(sexualorientation %in% c("Choose not to disclose", "Don't Know", "Other")|is.na(sexualorientation),'Unreported',sexualorientation ))) 
+rawnoshow%>%
+  group_by(sexualorientation1) %>%
+  summarise(cnt = n_distinct(PersonID))
+#Done
+```
+```{r}
+#MaritalStatus
+rawnoshow %>%
+  group_by(MaritalStatus) %>%
+  summarise(cnt = n_distinct(PersonID))
+#P: DOMESTIC PARTNER: live together but not married
+#I: 	Interlocutory
+#A: seperate
+#T: unreported
+rawnoshow = rawnoshow %>%
+  mutate(MaritalStatus1 = ifelse(is.na(MaritalStatus)|MaritalStatus %in% c('U', 'T'), 'Unreported',
+                                ifelse(MaritalStatus %in% c('S', 'M'), MaritalStatus, 'Other'))) 
+rawnoshow %>%
+  group_by(MaritalStatus1) %>%
+  summarise(cnt = n_distinct(PersonID))
+```
+
+```{r}
+#Preferred Contact
+rawnoshow %>%
+  group_by(PreferredContact) %>%
+  summarise(cnt = n_distinct(PersonID))
+rawnoshow = rawnoshow %>%
+  mutate(PreferredContact1 = ifelse(PreferredContact %in% c( 'Cell only', 'Cell Phone', 'cell phone'), 'Cell Phone',
+                                   ifelse(PreferredContact %in% c('day phone', 'Day Phone'), 'Day Phone', 
+                                          ifelse(PreferredContact %in% c('Home Phone', 'Secondary Home Phone'), 'Home Phone', 
+                                                 ifelse(PreferredContact %in% c('Work Phone','work phone','alternate phone', 'Alternate Phone'), 'Other Phone',
+                                                        ifelse(PreferredContact =='Confidential'|is.na(PreferredContact), 'Unreported', 'Other')))))) 
+rawnoshow%>%
+  group_by(PreferredContact1) %>%
+  summarise(cnt = n_distinct(PersonID))
+
+```
+```{r}
+#avgfamilysize &avgfamilyincome
+rawnoshow %>%
+  filter(!homeless %in% c('No', 'Not Homeless')) %>%
+  summarise(avg_homeless)
+  group_by(avgfamilysize) %>%
+  summarise(cnt = n_distinct(PersonID))
+  
+#USE Homeless column to fill avgfamilysize NULL
+  rawnoshow %>%
+    select(PersonID,homeless1, avgfamilysize, avgfamilyincome) %>%
+    distinct() %>%
+    group_by(homeless1) %>%
+    summarise(avg_fsize = mean(avgfamilysize, na.rm = TRUE),
+              avg_fincome = mean(avgfamilyincome, na.rm = TRUE))
+rawnoshow = rawnoshow %>%
+  mutate(avgfamilysize1 = ifelse(!is.na(avgfamilysize), avgfamilysize,
+                                 ifelse(homeless1 == 'No', 2.19, 
+                                        ifelse(homeless1 == 'Yes',2.20,2.49))),
+         avgfamilyincome1 = ifelse(!is.na(avgfamilyincome), avgfamilyincome,
+                                   ifelse(homeless1 == 'No', 19185.38,
+                                          ifelse(homeless1 == 'Yes',14042.02,12773.96)))) %>%
+  select(PersonID, homeless1, avgfamilysize1, avgfamilyincome1)  %>%
+  distinct() %>%
+  group_by(homeless1) %>%
+  summarise(minincome = min(avgfamilyincome1),
+            maxincome = max(avgfamilyincome1),
+            avgincome = mean(avgfamilyincome1))
+```
+
+```{r}
+#avg_checkinappt
+summary(hist_noshow$avg_checkintoappt)
+hist_noshow = hist_noshow %>%
+  mutate(avg_checkintoappt1 = ifelse(is.na(avg_checkintoappt), -1.3, avg_checkintoappt)) %>%
+  select(-avg_checkintoappt)
+```
+
+
+```{r}
+#specialty
+rawnoshow%>%
+  group_by(Specialty) %>%
+  summarise(cnt = n_distinct(PersonID))
+
+rawnoshow = rawnoshow %>%
+  mutate(Specialty1 = ifelse(is.na(Specialty), 'Unknown',
+                             ifelse(Specialty %in% c('Dental Hygienist', 'Dental Hygienists'), 'Dental Hygienist',
+                                    ifelse(Specialty %in% c('Dentist', 'Dentists'), 'Dentist',
+                                           ifelse(Specialty %in% c('Family Practitioner', 'Family Practioners'), 'Family Practitioner',
+                                                  ifelse(Specialty %in% c('Nurse Practitioner', 'Nurse Practitioners'), 'Nurse Practitioner', Specialty)))))) %>%
+  group_by(Specialty1) %>%
+  summarise(cnt = n_distinct(PersonID))
+```
+
+```{r}
+#primary payer, financial class
+rawnoshow = rawnoshow%>%
+  mutate(has_primarypayer = ifelse(is.na(primarypayer), 'No', 'Yes'))
+#number of goals/ number of drugs
+quantile(rawnoshow$num_surgehosp, na.rm = T)
+
+rawnoshow = rawnoshow%>%
+  mutate(num_drugs1 = ifelse(is.na(num_drugs), 'U', ifelse(num_drugs <=1, 'Q1', ifelse(num_drugs<=5, 'Q2', ifelse(num_drugs <= 10, 'Q3', ifelse(num_drugs <= 18, 'Q4', 'Q5'))))),
+         num_goals1 = ifelse(is.na(num_goals), 'U', num_goals),
+         num_surgehosp1 = ifelse(is.na(num_surgehosp), 'U', ifelse(num_surgehosp <=1, 'Q1', ifelse(num_surgehosp<=2, 'Q2', ifelse(num_surgehosp <= 3, 'Q3', ifelse(num_surgehosp <= 5, 'Q4', 'Q5'))))),
+         num_prescriptions1 = ifelse(is.na(num_prescriptions), 'U', ifelse(num_prescriptions <=1, 'Q1', ifelse(num_prescriptions<=7, 'Q2', ifelse(num_prescriptions <= 19, 'Q3', ifelse(num_prescriptions<= 49, 'Q4', 'Q5'))))))
+
+```
+```{r}
+#historical
+hist_noshow = rawnoshow %>%
+  filter(first_appointment == 0) %>%
+  select(-c(pat_address1, pat_address2, pat_city, pat_zip, per_state, loc_address1, loc_address2, loc_city, loc_state, loc_zipcode, PersonID, first_appointment, primarypayer, financialclass, Specialty, avgfamilysize, avgfamilyincome, PreferredContact, MaritalStatus, sexualorientation, migrantstatus, veteran, homeless, language, genderidentity, sex, apptdate, cnt_late_arr,num_goals, num_surgehosp,num_prescriptions,num_drugs, language, language1, cancelled, rescheduled, X)) %>%
+  distinct() %>%
+  as.data.frame()
+#check whether still NULL value
+sapply(hist_noshow, function(x) sum(is.na(x)))
+```
+```{r}
+write.csv(hist_noshow, 'hist_noshow2020.csv', row.names = FALSE)
+colnames(hist_noshow)
+```
+#this ste is for LGBM, which can handle NULL itself
+```{r}
+#primary payer flag, 
+hist_noshow2 = rawnoshow %>%
+  filter(first_appointment == '0') %>%
+  select(-c(PersonID,pat_address1, pat_address2, pat_city, pat_zip, per_state, loc_address1, loc_address2, loc_city, loc_state, loc_zipcode,first_appointment, apptdate, cnt_late_arr )) %>%
+  distinct()
+# + distance
+```
+Get the variables only needed in the model
+
+```{r}
+rawnoshow %>%
+  group_by(languagebarrier) %>%
+  summarise(cnt = n_distinct(PersonID))
+#T/F to 1/0
+hist_noshow2v1= hist_noshow2 %>%
+  mutate(cancelled = ifelse(cancelled == 'True', 1, 0),
+         rescheduled =ifelse(cancelled == 'True', 1, 0),
+         veteran1 = ifelse(veteran =='Y', 1, ifelse(veteran == 'N', 0, NA)),
+         languagebarrier1 =ifelse(languagebarrier == 'Yes', 1, 0),
+         language1 = ifelse(ethnicity == 'Hispanic/Latino'|language == 'Sp','Spanish', 
+                           ifelse(ethnicity == 'Non-Hispanic/Latino'|language == 'E', 'English',
+                                  ifelse(ethnicity == 'Unreported/Refused to Report Ethnicity', NA, language))),
+         primarypayer1 = ifelse(is.na(primarypayer), 0, 1),
+         homeless1 = ifelse(homeless %in% c('Not Homeless', 'Doubling Up', 'No'), 0, 
+                           ifelse(homeless %in% c('Shelter', 'Street', 'Transitional', 'Yes'), 1,NA)),
+         migrantstatus1 =ifelse(migrantstatus %in% c('Seasonal', 'Migrant'), 1,
+                                ifelse(is.na(migrantstatus)|migrantstatus == 'Needs To Be Updated', NA, 0)),
+         sexualorientation1 = ifelse(sexualorientation %in% c('Straight or heterosexual', 'Straight Or Heterosexual'), 'Heterosexual',
+                                     ifelse(sexualorientation %in% c("Choose not to disclose", "Don't Know", "Other")|is.na(sexualorientation),NA,sexualorientation )),
+         genderidentity1 = ifelse(genderidentity =="Decline to Specify", NA, genderidentity),
+         MaritalStatus1 =ifelse(MaritalStatus %in% c('U', 'T'), NA,
+                                ifelse(MaritalStatus %in% c('S', 'M'), MaritalStatus, 'Other')),
+         PreferredContact1 = ifelse(PreferredContact %in% c( 'Cell only', 'Cell Phone', 'cell phone'), 'Cell Phone',
+                                    ifelse(PreferredContact %in% c('day phone', 'Day Phone'), 'Day Phone', 
+                                          ifelse(PreferredContact %in% c('Home Phone', 'Secondary Home Phone'), 'Home Phone', 
+                                                 ifelse(PreferredContact %in% c('Work Phone','work phone','alternate phone', 'Alternate Phone'), 'Other Phone',
+                                                        ifelse(PreferredContact =='Confidential'|is.na(PreferredContact), NA, 'Other'))))),
+         Specialty1 = ifelse(is.na(Specialty), NA,
+                             ifelse(Specialty %in% c('Dental Hygienist', 'Dental Hygienists'), 'Dental Hygienist',
+                                    ifelse(Specialty %in% c('Dentist', 'Dentists'), 'Dentist',
+                                           ifelse(Specialty %in% c('Family Practitioner', 'Family Practioners'), 'Family Practitioner',
+                                                  ifelse(Specialty %in% c('Nurse Practitioner', 'Nurse Practitioners'), 'Nurse Practitioner', Specialty))))))
+hist_noshow2v1  = hist_noshow2v1 %>%
+  select(-c(primarypayer, financialclass, Specialty,  PreferredContact, MaritalStatus, sexualorientation, migrantstatus, veteran, homeless, language, genderidentity))
+
+write.csv(hist_noshow2v1, 'hist_noshow2v1.csv', row.names = FALSE)
+
+```
+
+add distance and driving time variables
+```{r}
+hist_noshow = read.csv('C:\\Users\\tianyi.fang\\Documents\\Projects_Infinedi\\HeartLand\\hist_noshow.csv', header = TRUE, stringsAsFactors = FALSE)
+hist_noshow2 = read.csv('C:\\Users\\tianyi.fang\\Documents\\Projects_Infinedi\\HeartLand\\hist_noshow2v1.csv', header = TRUE, stringsAsFactors = FALSE)
+address = read.csv('C:\\Users\\tianyi.fang\\Desktop\\TF\\projects\\TACHC\\NoShow\\address_2019.csv', header = TRUE, stringsAsFactors = FALSE )
+length(unique(hist_noshow$apptid))
+```
+
+```{r}
+rawnoshow = rawnoshow %>%
+  mutate(appt_year = as.numeric(str_sub(sub(' .*', '', apptdate),-4, -1)))
+hist_noshow=hist_noshow %>%
+  inner_join(rawnoshow %>%select(apptid, appt_year), by = 'apptid')
+hist_noshow2=hist_noshow2 %>%
+  inner_join(rawnoshow %>%select(apptid, appt_year), by = 'apptid')
+```
+
+```{r}
+#exclude future appt and exclude appt before 2010
+hist_noshow = hist_noshow %>%
+  filter(future_apt !=1 & appt_year >=2010)
+hist_noshow2 = hist_noshow2 %>%
+  filter(future_apt !=1& appt_year >=2010)
+
+
+
+write.csv(rawnoshow, 'noshow8.csv', row.names = FALSE)
+write.csv(hist_noshow, 'hist_noshow.csv', row.names = FALSE)
+write.csv(hist_noshow2, 'hist_noshow2v1.csv', row.names = FALSE)
+
+
+```
+
+```{r}
+hist_noshow %>%
+  filter(future_apt !=1) %>%
+  mutate(appt_date = as.Date(paste0(month, '/', day, '/', appt_year,sep = '' ), format = '%m/%d/%Y')) %>%
+  filter(appt_date > Sys.Date()) %>%
+  select(apptid, appt_date, noshow) %>%
+  arrange(appt_date)
+
+hist_noshow %>%
+  filter(future_apt >=0 &daysfuture >=0)
+
+```
+```{r}
+hist_noshow_wid = read.csv('C:\\Users\\tianyi.fang\\Documents\\Projects_Infinedi\\HeartLand\\hist_noshow_wid.csv', header = TRUE, stringsAsFactors =FALSE)
+```
+```{r}
+hist_noshow_wid %>%
+  filter(appt_year == 2019 & daysfuture >=0) %>%
+  group_by(PersonID) %>%
+  summarise(cnt_noshow = sum(ifelse(noshow == 'Yes', 1, 0)),
+            tot_appt = n()) %>%
+  mutate(noshow_pct = round(cnt_noshow/tot_appt, 3)) %>%
+  arrange(desc(noshow_pct))
+
+```
+
+
